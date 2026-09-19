@@ -10,14 +10,18 @@ extern crate alloc;
 
 pub mod arch;
 pub mod boot;
+pub mod bootscreen;
 pub mod drivers;
+pub mod gfx;
 pub mod mm;
 pub mod panic_screen;
 pub mod sync;
 
+use alloc::format;
 use core::panic::PanicInfo;
 
 use arch::port;
+use bootscreen::{BootScreen, Status};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -26,26 +30,149 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[no_mangle]
 pub extern "C" fn kmain(mbi_phys: u64) -> ! {
     drivers::serial::init();
-
     serial_println!();
     serial_println!("HALCYON v{} — cold start", VERSION);
-    serial_println!("[boot] long mode entered, higher half active");
 
+    // The multiboot structure lives in low memory, reachable only while the
+    // bootstrap identity map is still active. Parse it into owned storage now.
     let info = unsafe { boot::parse(mbi_phys) };
+    log_boot_info(&info);
 
+    let cpu = arch::cpu::identify();
+    serial_println!(
+        "[cpu ] {} | vendor {} | pat:{} nx:{} apic:{}",
+        cpu.brand_str(),
+        cpu.vendor_str(),
+        cpu.has_pat,
+        cpu.has_nx,
+        cpu.has_apic
+    );
+
+    arch::interrupts::init();
+    arch::pit::init();
+    arch::interrupts::enable();
+
+    // Switches CR3 and brings up the heap; the identity map is gone afterwards.
+    let memory = unsafe { mm::init(&info) };
+
+    let display = match info.framebuffer {
+        Some(framebuffer) => gfx::fb::init(&framebuffer, memory.space.framebuffer_virt),
+        None => Err(gfx::fb::InitError::NoFramebuffer),
+    };
+
+    let mut screen = BootScreen::new();
+    screen.step(
+        Status::Ok,
+        format!("HALCYON v{}  —  {}", VERSION, info.bootloader_name()),
+    );
+    screen.step(
+        Status::Ok,
+        format!("long mode, higher half at {:#x}", boot::KERNEL_VMA),
+    );
+
+    let brand = cpu.brand_str();
+    screen.step(
+        Status::Ok,
+        format!(
+            "cpu: {}",
+            if brand.is_empty() { cpu.vendor_str() } else { brand }
+        ),
+    );
+    screen.step(
+        Status::Ok,
+        format!("interrupts: IDT loaded, PIT at {} Hz", arch::pit::TICK_HZ),
+    );
+
+    let (total, total_unit) = mm::format_bytes(memory.total_bytes);
+    screen.step(
+        Status::Ok,
+        format!(
+            "memory: {} {} RAM, 4-level paging, heap live",
+            total, total_unit
+        ),
+    );
+
+    match &display {
+        Ok(()) => {
+            let (width, height, depth, fast) = gfx::fb::FRAMEBUFFER.lock().describe();
+            screen.step(
+                Status::Ok,
+                format!(
+                    "display: {}x{}x{} {}",
+                    width,
+                    height,
+                    depth,
+                    if fast { "(direct blit)" } else { "(converted)" }
+                ),
+            );
+            screen.step(
+                Status::Ok,
+                format!(
+                    "framebuffer cache: {}",
+                    if memory.space.write_combining {
+                        "write-combining"
+                    } else {
+                        "uncached"
+                    }
+                ),
+            );
+        }
+        Err(error) => {
+            screen.step(Status::Fail, format!("display unavailable: {:?}", error));
+        }
+    }
+
+    match selftest_heap() {
+        Ok(report) => screen.step(Status::Ok, report),
+        Err(report) => screen.step(Status::Fail, report),
+    }
+
+    for (index, module) in info.modules().iter().enumerate() {
+        screen.step(
+            Status::Info,
+            format!(
+                "module {}: {} KiB at {:#x}",
+                index,
+                (module.end - module.start) / 1024,
+                module.start
+            ),
+        );
+    }
+
+    serial_println!("[boot] HALCYON-BOOT-OK");
+
+    if info.cmdline().contains("selftest=fault") {
+        screen.step(
+            Status::Warn,
+            format!("self-test: raising a deliberate page fault"),
+        );
+        arch::pit::delay_ms(400);
+        unsafe {
+            // Canonical (bits 63:47 clear) but far outside anything we map, so
+            // the CPU takes a real page fault rather than a #GP.
+            core::ptr::write_volatile(0x0000_0008_0000_0000_u64 as *mut u64, 1);
+        }
+    }
+
+    screen.step(Status::Info, format!("desktop not yet implemented; idle"));
+
+    loop {
+        port::halt();
+    }
+}
+
+fn log_boot_info(info: &boot::BootInfo) {
     serial_println!("[boot] loader: {}", info.bootloader_name());
     if !info.cmdline().is_empty() {
         serial_println!("[boot] cmdline: {}", info.cmdline());
     }
-
-    let (kstart, kend) = boot::kernel_image_extent();
+    let (start, end) = boot::kernel_image_extent();
     serial_println!(
-        "[boot] kernel image: {:#x}..{:#x} ({} KiB)",
-        kstart,
-        kend,
-        (kend - kstart) / 1024
+        "[boot] kernel image {:#x}..{:#x} ({} KiB)",
+        start,
+        end,
+        (end - start) / 1024
     );
-
     serial_println!(
         "[mem ] {} regions, {} MiB usable",
         info.region_count,
@@ -59,7 +186,6 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
             region.kind
         );
     }
-
     match info.framebuffer {
         Some(fb) => serial_println!(
             "[gfx ] framebuffer {}x{}x{} pitch {} at {:#x} ({:?})",
@@ -70,106 +196,14 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
             fb.addr,
             fb.kind
         ),
-        None => serial_println!("[gfx ] no framebuffer supplied by the bootloader"),
+        None => serial_println!("[gfx ] bootloader supplied no framebuffer"),
     }
-
-    for (index, module) in info.modules().iter().enumerate() {
-        serial_println!(
-            "[boot] module {}: {:#x}..{:#x} ({} KiB)",
-            index,
-            module.start,
-            module.end,
-            (module.end - module.start) / 1024
-        );
-    }
-
-    let cpu = arch::cpu::identify();
-    serial_println!(
-        "[cpu ] {} (family {:#x} model {:#x} stepping {})",
-        cpu.brand_str(),
-        cpu.family,
-        cpu.model,
-        cpu.stepping
-    );
-    serial_println!(
-        "[cpu ] vendor {} | pat:{} nx:{} sse2:{} apic:{}",
-        cpu.vendor_str(),
-        cpu.has_pat,
-        cpu.has_nx,
-        cpu.has_sse2,
-        cpu.has_apic
-    );
-
-    arch::interrupts::init();
-    serial_println!("[intr] GDT, TSS, IDT loaded; PIC remapped to 32..47");
-
-    arch::pit::init();
-    arch::interrupts::enable();
-    serial_println!("[intr] interrupts enabled, PIT at {} Hz", arch::pit::TICK_HZ);
-
-    // Prove the timer actually fires before anything depends on it.
-    let start = arch::pit::ticks();
-    let spin_until = arch::cpu::rdtsc() + 200_000_000;
-    while arch::cpu::rdtsc() < spin_until {
-        core::hint::spin_loop();
-    }
-    let elapsed = arch::pit::ticks() - start;
-    if elapsed > 0 {
-        serial_println!("[intr] timer advanced {} ticks — IRQ0 is live", elapsed);
-    } else {
-        serial_println!("[intr] WARNING: timer did not advance");
-    }
-
-    let memory = unsafe { mm::init(&info) };
-    let (total, total_unit) = mm::format_bytes(memory.total_bytes);
-    let (usable, usable_unit) = mm::format_bytes(memory.usable_bytes);
-    serial_println!(
-        "[mm  ] {} {} addressable, {} {} usable RAM",
-        total,
-        total_unit,
-        usable,
-        usable_unit
-    );
-    serial_println!(
-        "[mm  ] address space live: physmap {:#x}, heap {:#x}, framebuffer {:#x}",
-        mm::paging::PHYSMAP_BASE,
-        mm::paging::HEAP_BASE,
-        memory.space.framebuffer_virt
-    );
-    serial_println!(
-        "[mm  ] framebuffer caching: {}",
-        if memory.space.write_combining {
-            "write-combining (PAT entry 4)"
-        } else {
-            "uncached (no PAT)"
-        }
-    );
-    selftest_heap();
-
-    serial_println!("[boot] HALCYON-BOOT-OK");
-
-    // A deliberate fault, only when asked for: `selftest=fault` on the GRUB
-    // command line. Proves the exception path reports rather than triple-faults.
-    if info.cmdline().contains("selftest=fault") {
-        serial_println!("[test] triggering a deliberate page fault...");
-        unsafe {
-            // Canonical (bits 63:47 all clear) but far outside anything we map,
-            // so the CPU takes a real page fault rather than a #GP for a
-            // non-canonical address.
-            let bad = 0x0000_0008_0000_0000_u64 as *mut u64;
-            core::ptr::write_volatile(bad, 1);
-        }
-    }
-
-    serial_println!("[boot] nothing further implemented yet; parking.");
-
-    port::park()
 }
 
 /// Exercise the allocator hard enough to catch the classic failures: a
 /// free-list that does not coalesce, a leak on drop, or alignment padding that
 /// never comes back.
-fn selftest_heap() {
+fn selftest_heap() -> Result<alloc::string::String, alloc::string::String> {
     use alloc::collections::BTreeMap;
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -211,22 +245,21 @@ fn selftest_heap() {
 
     let after = mm::heap::ALLOCATOR.stats();
     let leaked = after.live_allocations.saturating_sub(before.live_allocations);
-    let (mapped, mapped_unit) = mm::format_bytes(after.mapped);
-    serial_println!(
-        "[mm  ] heap self-test: {} allocations served, {} {} mapped, {} free blocks",
-        after.total_allocations - before.total_allocations,
-        mapped,
-        mapped_unit,
-        after.free_blocks
-    );
+    let served = after.total_allocations - before.total_allocations;
+
     if leaked == 0 && after.allocated == before.allocated {
-        serial_println!("[mm  ] heap self-test: no leak, free list coalesced — HEAP-OK");
+        serial_println!("[mm  ] heap self-test: HEAP-OK");
+        Ok(format!(
+            "heap: {} allocations, no leak, {} free block(s)",
+            served, after.free_blocks
+        ))
     } else {
-        serial_println!(
-            "[mm  ] heap self-test: LEAK — {} allocations and {} bytes outstanding",
+        serial_println!("[mm  ] heap self-test: LEAK");
+        Err(format!(
+            "heap: LEAK — {} allocations, {} bytes outstanding",
             leaked,
             after.allocated - before.allocated
-        );
+        ))
     }
 }
 
