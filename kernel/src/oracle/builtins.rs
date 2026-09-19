@@ -442,18 +442,21 @@ pub fn install(interpreter: &mut Interpreter) {
         Ok(Value::Nil)
     });
 
-    // Physical memory access. Reads go through the physical map; a bad address
-    // faults exactly as it would anywhere else in the kernel.
+    // Physical memory access, through the physical map.
+    //
+    // Reads are bounded to mapped RAM rather than trusting the caller: an
+    // address past the physical map is not a HALCYON bug worth a fault screen,
+    // it is a typo at a shell prompt, and it should not take the desktop down.
     install_one(interpreter, "peek", |_, args| {
         need(&args, 1, "peek")?;
-        let address = args[0].as_int()? as u64;
+        let address = checked_phys(args[0].as_int()?, 1)?;
         let value =
             unsafe { core::ptr::read_volatile(mm::paging::phys_to_virt(address) as *const u8) };
         Ok(Value::Int(value as i64))
     });
     install_one(interpreter, "peek32", |_, args| {
         need(&args, 1, "peek32")?;
-        let address = args[0].as_int()? as u64;
+        let address = checked_phys(args[0].as_int()?, 4)?;
         let value =
             unsafe { core::ptr::read_volatile(mm::paging::phys_to_virt(address) as *const u32) };
         Ok(Value::Int(value as i64))
@@ -502,6 +505,23 @@ pub fn install(interpreter: &mut Interpreter) {
             .map_err(|error| error.to_string())?;
         Ok(Value::Bool(true))
     });
+}
+
+/// Validate a physical address for `peek`, so a mistyped one is an error
+/// rather than a page fault.
+fn checked_phys(address: i64, width: u64) -> Result<u64, String> {
+    if address < 0 {
+        return Err("address must not be negative".to_string());
+    }
+    let address = address as u64;
+    let limit = mm::FRAMES.lock().total_bytes();
+    if address.saturating_add(width) > limit {
+        return Err(format!(
+            "{:#x} is outside mapped physical memory (0..{:#x})",
+            address, limit
+        ));
+    }
+    Ok(address)
 }
 
 /// Apply a callable value — used by `map`, `filter` and `fold`.

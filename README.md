@@ -42,9 +42,20 @@ reach one, and it will tell you so if you ask.
 
 ## Get it running
 
-### The quickest path
+### Getting the ISO
 
-Download `halcyon.iso` from [Releases](../../releases), then either:
+Every CI run builds and boot-tests one, then attaches it: open the latest green
+run under [Actions](../../actions), and download the **halcyon-iso** artifact
+(it arrives as a zip containing `halcyon.iso` and its SHA-256).
+
+To get a permanent download link instead, tag a commit and push it — the
+workflow publishes the ISO as a [Release](../../releases):
+
+```sh
+git tag -a v0.1.0 -m "HALCYON v0.1.0" && git push origin v0.1.0
+```
+
+Then either:
 
 ```sh
 # a virtual machine
@@ -57,9 +68,6 @@ sudo dd if=halcyon.iso of=/dev/sdX bs=4M status=progress conv=fsync
 On Windows use [Rufus](https://rufus.ie) in DD mode, or drop the ISO onto a
 [Ventoy](https://ventoy.net) stick. For VirtualBox or VMware, make a 64-bit
 "Other" guest with 512 MB of RAM and attach the ISO — no virtual disk needed.
-
-If there is no release yet, every CI run attaches the ISO as a build artifact,
-or tag a commit `v0.1.0` and push to have one published.
 
 ### Booting your own machine
 
