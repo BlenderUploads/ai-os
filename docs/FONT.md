@@ -63,7 +63,11 @@ Regenerate with:
 
 ```sh
 python3 tools/mkfont.py > kernel/src/gfx/font_data.rs
+(cd kernel && cargo fmt)
 ```
+
+The second step matters only because the committed file has been through
+`cargo fmt` with the rest of the tree; skipping it leaves a formatting-only diff.
 
 The generator validates the shape of every entry, so a row of the wrong length
 fails loudly rather than producing a quietly mangled glyph. Anything left
@@ -87,10 +91,3 @@ exactly how the mapping came to be written.
 There is no separate bold face. `Weight::Bold` smears each scanline one pixel to
 the right (`bits | (bits >> 1)`), which is how bitmap terminals have always
 faked it and is more than convincing at this size.
-
-The generator's output is committed as written, then passed through `cargo fmt`
-along with the rest of the tree, so regenerate with:
-
-```sh
-python3 tools/mkfont.py > kernel/src/gfx/font_data.rs && (cd kernel && cargo fmt)
-```

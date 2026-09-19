@@ -65,11 +65,14 @@ PS/2 and work; some are I2C-attached and will not. An external PS/2 mouse works
 where a port exists. The GUI is usable from the keyboard alone: F1–F7 open
 applications, alt+tab cycles, ctrl+W closes.
 
-**Unusual framebuffer formats.** HALCYON asks GRUB for 1024×768×32 and copes
-with other sizes and with 24/16-bit depths, but only direct-colour modes. If
-your firmware only offers a palette mode, the boot screen will say the display
-is unavailable. The GRUB menu's **safe mode** entry forces 800×600×32, which is
-worth trying.
+**Unusual framebuffer formats.** HALCYON asks GRUB for 1024×768×32, but the
+request is flagged optional, so GRUB falls back to whatever the hardware can
+actually provide and the kernel adapts — other sizes work, and so do 24- and
+16-bit depths. Only direct-colour modes are supported: if your firmware offers
+nothing but a palette mode, the boot screen will say the display is unavailable.
+
+**If the mouse misbehaves**, the GRUB menu's **safe mode** entry boots without
+touching the PS/2 mouse at all. The desktop is fully usable from the keyboard.
 
 **No suspend, no battery reporting, no backlight control, no sound beyond the
 PC speaker** (which many laptops no longer have — `beep` will simply be silent).
