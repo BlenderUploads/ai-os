@@ -20,12 +20,7 @@ const SLP_EN: u16 = 1 << 13;
 
 unsafe fn table_signature(phys: u64) -> [u8; 4] {
     let pointer = phys_to_virt(phys) as *const u8;
-    [
-        *pointer,
-        *pointer.add(1),
-        *pointer.add(2),
-        *pointer.add(3),
-    ]
+    [*pointer, *pointer.add(1), *pointer.add(2), *pointer.add(3)]
 }
 
 unsafe fn table_length(phys: u64) -> u32 {

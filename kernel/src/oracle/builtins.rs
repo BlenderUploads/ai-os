@@ -51,7 +51,11 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("env", "every name currently bound"),
 ];
 
-fn install_one(interpreter: &mut Interpreter, name: &'static str, function: super::value::BuiltinFn) {
+fn install_one(
+    interpreter: &mut Interpreter,
+    name: &'static str,
+    function: super::value::BuiltinFn,
+) {
     interpreter
         .global
         .define(Rc::from(name), Value::Builtin(name, function));
@@ -291,7 +295,12 @@ pub fn install(interpreter: &mut Interpreter) {
     install_one(interpreter, "ord", |_, args| {
         need(&args, 1, "ord")?;
         Ok(Value::Int(
-            args[0].as_str()?.chars().next().map(|c| c as i64).unwrap_or(0),
+            args[0]
+                .as_str()?
+                .chars()
+                .next()
+                .map(|c| c as i64)
+                .unwrap_or(0),
         ))
     });
 
@@ -382,7 +391,10 @@ pub fn install(interpreter: &mut Interpreter) {
         drop(frames);
         let heap = mm::heap::ALLOCATOR.stats();
         Ok(Value::list(alloc::vec![
-            Value::list(alloc::vec![Value::string("total"), Value::Int(total as i64)]),
+            Value::list(alloc::vec![
+                Value::string("total"),
+                Value::Int(total as i64)
+            ]),
             Value::list(alloc::vec![Value::string("used"), Value::Int(used as i64)]),
             Value::list(alloc::vec![Value::string("free"), Value::Int(free as i64)]),
             Value::list(alloc::vec![
@@ -421,7 +433,10 @@ pub fn install(interpreter: &mut Interpreter) {
         let (frequency, duration) = match args.len() {
             0 => (880, 80),
             1 => (args[0].as_int()? as u32, 80),
-            _ => (args[0].as_int()? as u32, args[1].as_int()?.clamp(1, 2000) as u64),
+            _ => (
+                args[0].as_int()? as u32,
+                args[1].as_int()?.clamp(1, 2000) as u64,
+            ),
         };
         speaker::beep(frequency, duration);
         Ok(Value::Nil)
@@ -432,7 +447,8 @@ pub fn install(interpreter: &mut Interpreter) {
     install_one(interpreter, "peek", |_, args| {
         need(&args, 1, "peek")?;
         let address = args[0].as_int()? as u64;
-        let value = unsafe { core::ptr::read_volatile(mm::paging::phys_to_virt(address) as *const u8) };
+        let value =
+            unsafe { core::ptr::read_volatile(mm::paging::phys_to_virt(address) as *const u8) };
         Ok(Value::Int(value as i64))
     });
     install_one(interpreter, "peek32", |_, args| {
@@ -481,7 +497,9 @@ pub fn install(interpreter: &mut Interpreter) {
         need(&args, 1, "rm")?;
         let path = args[0].as_str()?.to_string();
         let mut filesystem = fs::FS.lock();
-        filesystem.remove(&path).map_err(|error| error.to_string())?;
+        filesystem
+            .remove(&path)
+            .map_err(|error| error.to_string())?;
         Ok(Value::Bool(true))
     });
 }

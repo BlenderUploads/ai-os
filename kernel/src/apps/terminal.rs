@@ -68,7 +68,12 @@ impl Terminal {
 
         if !input.trim().is_empty() {
             // Avoid stacking identical consecutive entries in the history.
-            if self.history.last().map(|last| last != &input).unwrap_or(true) {
+            if self
+                .history
+                .last()
+                .map(|last| last != &input)
+                .unwrap_or(true)
+            {
                 self.history.push(input.clone());
             }
         }
@@ -229,7 +234,10 @@ impl App for Terminal {
             Key::Tab => {
                 // Complete against the names ORACLE knows.
                 let prefix: String = self.input.chars().take(self.caret).collect();
-                let word = prefix.rsplit(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("");
+                let word = prefix
+                    .rsplit(|c: char| c.is_whitespace() || c == '(')
+                    .next()
+                    .unwrap_or("");
                 if !word.is_empty() {
                     let names = self.shell.interpreter.global.names();
                     let matches: Vec<&String> =
@@ -240,8 +248,11 @@ impl App for Terminal {
                         self.input.insert_str(offset, completion);
                         self.caret += completion.chars().count();
                     } else if matches.len() > 1 {
-                        let joined: Vec<String> =
-                            matches.iter().take(24).map(|name| name.to_string()).collect();
+                        let joined: Vec<String> = matches
+                            .iter()
+                            .take(24)
+                            .map(|name| name.to_string())
+                            .collect();
                         self.push(Line::new(joined.join("  "), palette::TEXT_DIM));
                     }
                 }

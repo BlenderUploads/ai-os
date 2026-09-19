@@ -53,7 +53,12 @@ impl App for Monitor {
         y += 20;
 
         let percent = (used * 100 / usable) as u32;
-        bar(surface, Rect::new(12, y, width - 24, 14), percent, palette::AMBER);
+        bar(
+            surface,
+            Rect::new(12, y, width - 24, 14),
+            percent,
+            palette::AMBER,
+        );
         y += 18;
         let (used_value, used_unit) = mm::format_bytes(used);
         let (total_value, total_unit) = mm::format_bytes(total);
@@ -118,7 +123,12 @@ impl App for Monitor {
 
         surface.text_ex("THREADS", 12, y, palette::CYAN, Weight::Bold, 1);
         y += 20;
-        surface.text("id   name            state      ticks", 12, y, palette::TEXT_FAINT);
+        surface.text(
+            "id   name            state      ticks",
+            12,
+            y,
+            palette::TEXT_FAINT,
+        );
         y += 16;
 
         for thread in task::snapshot() {
@@ -140,7 +150,12 @@ impl App for Monitor {
             let name: alloc::string::String = thread.name.chars().take(15).collect();
             surface.text(&name, 12 + 5 * 8, y, color);
             surface.text(state, 12 + 21 * 8, y, palette::TEXT_DIM);
-            surface.text(&format!("{}", thread.ticks_used), 12 + 32 * 8, y, palette::TEXT_DIM);
+            surface.text(
+                &format!("{}", thread.ticks_used),
+                12 + 32 * 8,
+                y,
+                palette::TEXT_DIM,
+            );
             y += 16;
         }
 

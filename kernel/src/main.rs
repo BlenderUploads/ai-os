@@ -90,7 +90,11 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         Status::Ok,
         format!(
             "cpu: {}",
-            if brand.is_empty() { cpu.vendor_str() } else { brand }
+            if brand.is_empty() {
+                cpu.vendor_str()
+            } else {
+                brand
+            }
         ),
     );
     screen.step(
@@ -151,7 +155,11 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
     let (fs_bytes, fs_count) = (filesystem.total_bytes(), filesystem.count());
     drop(filesystem);
     screen.step(
-        if mounted > 0 { Status::Ok } else { Status::Warn },
+        if mounted > 0 {
+            Status::Ok
+        } else {
+            Status::Warn
+        },
         format!(
             "filesystem: {} file(s) from initrd, {} total, {} bytes in RAM",
             mounted, fs_count, fs_bytes
@@ -164,18 +172,32 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         drivers::mouse::init();
     }
     screen.step(
-        if ps2.controller_ok { Status::Ok } else { Status::Warn },
+        if ps2.controller_ok {
+            Status::Ok
+        } else {
+            Status::Warn
+        },
         format!(
             "input: 8042 {}, keyboard ready, mouse {}",
-            if ps2.controller_ok { "ok" } else { "self-test failed" },
+            if ps2.controller_ok {
+                "ok"
+            } else {
+                "self-test failed"
+            },
             if ps2.mouse_present { "ready" } else { "absent" }
         ),
     );
 
-    let acpi = info.rsdp.and_then(|rsdp| unsafe { arch::acpi::discover(rsdp) });
+    let acpi = info
+        .rsdp
+        .and_then(|rsdp| unsafe { arch::acpi::discover(rsdp) });
     *POWER_OFF.lock() = acpi;
     screen.step(
-        if acpi.is_some() { Status::Ok } else { Status::Warn },
+        if acpi.is_some() {
+            Status::Ok
+        } else {
+            Status::Warn
+        },
         match acpi {
             Some(config) => format!(
                 "acpi: shutdown via PM1a {:#x}, S5 type {}",
@@ -225,7 +247,10 @@ fn run_desktop(info: &boot::BootInfo) -> ! {
         desktop.open("about");
         desktop.open("terminal");
     }
-    desktop.set_status("F1 terminal  F2 monitor  F3 about  |  alt+tab switches", 8000);
+    desktop.set_status(
+        "F1 terminal  F2 monitor  F3 about  |  alt+tab switches",
+        8000,
+    );
 
     serial_println!("[ui  ] desktop running, {} windows", desktop.window_count());
     serial_println!("[ui  ] HALCYON-DESKTOP-OK");
@@ -337,7 +362,9 @@ fn selftest_heap() -> Result<alloc::string::String, alloc::string::String> {
     }
 
     let after = mm::heap::ALLOCATOR.stats();
-    let leaked = after.live_allocations.saturating_sub(before.live_allocations);
+    let leaked = after
+        .live_allocations
+        .saturating_sub(before.live_allocations);
     let served = after.total_allocations - before.total_allocations;
 
     if leaked == 0 && after.allocated == before.allocated {

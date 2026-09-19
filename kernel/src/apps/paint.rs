@@ -82,7 +82,10 @@ impl App for Paint {
         surface.blit(&self.canvas, 0, TOOLBAR);
 
         // Toolbar.
-        surface.fill_rect(Rect::new(0, 0, width, TOOLBAR), palette::rgb(0x12, 0x18, 0x28));
+        surface.fill_rect(
+            Rect::new(0, 0, width, TOOLBAR),
+            palette::rgb(0x12, 0x18, 0x28),
+        );
         surface.hline(0, TOOLBAR - 1, width, palette::BORDER);
 
         for (index, color) in PALETTE.iter().enumerate() {

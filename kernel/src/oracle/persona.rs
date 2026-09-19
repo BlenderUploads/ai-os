@@ -23,14 +23,28 @@ const RESPONSES: &[(&[&str], &str)] = &[
          you get from me is a lookup, honestly labelled.",
     ),
     (
-        &["are you ai", "are you an ai", "are you intelligent", "are you conscious", "chatgpt", "gpt", "llm", "language model"],
+        &[
+            "are you ai",
+            "are you an ai",
+            "are you intelligent",
+            "are you conscious",
+            "chatgpt",
+            "gpt",
+            "llm",
+            "language model",
+        ],
         "No. I want to be clear about that, since the repository this came from\n\
          is called ai-os. I am a few hundred lines of pattern matching over a\n\
          fixed table. The interesting part of this machine is underneath me:\n\
          the paging code, the scheduler, the compositor. Try `mem` or `ps`.",
     ),
     (
-        &["what is halcyon", "about halcyon", "what is this", "what am i running"],
+        &[
+            "what is halcyon",
+            "about halcyon",
+            "what is this",
+            "what am i running",
+        ],
         "HALCYON is an operating system written from nothing. No Linux kernel,\n\
          no libc, no third-party libraries. The bootstrap that put this CPU into\n\
          long mode, the page tables under every address you can name, the\n\
@@ -51,24 +65,22 @@ const RESPONSES: &[(&[&str], &str)] = &[
          evaluated as Lisp -- try (+ 1 2), (mem), (threads), (pci) or\n\
          (map (lambda (x) (* x x)) (range 10)).",
     ),
-    (
-        &["memory", "ram", "how much memory"],
-        "__MEMORY__",
-    ),
-    (
-        &["uptime", "how long", "running for"],
-        "__UPTIME__",
-    ),
-    (
-        &["cpu", "processor", "what cpu"],
-        "__CPU__",
-    ),
+    (&["memory", "ram", "how much memory"], "__MEMORY__"),
+    (&["uptime", "how long", "running for"], "__UPTIME__"),
+    (&["cpu", "processor", "what cpu"], "__CPU__"),
     (
         &["thread", "process", "scheduler", "multitask"],
         "__THREADS__",
     ),
     (
-        &["disk", "hard drive", "storage", "save", "write to disk", "safe"],
+        &[
+            "disk",
+            "hard drive",
+            "storage",
+            "save",
+            "write to disk",
+            "safe",
+        ],
         "Nothing here touches a disk. HALCYON has no block-device write path at\n\
          all -- the code to do it does not exist. Files live in RAM, seeded from\n\
          the initrd, and vanish at power-off. That is why booting this on real\n\

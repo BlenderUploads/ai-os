@@ -162,7 +162,10 @@ impl App for Editor {
         if focused && self.blink && self.row >= self.scroll && self.row < self.scroll + rows {
             let caret_x = GUTTER * CELL_W + 6 + self.column as i32 * CELL_W;
             let caret_y = 4 + (self.row - self.scroll) as i32 * CELL_H;
-            surface.fill_rect(Rect::new(caret_x, caret_y, CELL_W, CELL_H - 1), palette::AMBER);
+            surface.fill_rect(
+                Rect::new(caret_x, caret_y, CELL_W, CELL_H - 1),
+                palette::AMBER,
+            );
             if let Some(ch) = self.lines[self.row].chars().nth(self.column) {
                 let mut buffer = [0u8; 4];
                 surface.text(
@@ -194,12 +197,7 @@ impl App for Editor {
             palette::TEXT_FAINT,
         );
         if !self.message.is_empty() {
-            surface.text(
-                &self.message,
-                6,
-                bar.y - CELL_H - 2,
-                palette::CYAN_DIM,
-            );
+            surface.text(&self.message, 6, bar.y - CELL_H - 2, palette::CYAN_DIM);
         }
 
         self.dirty = false;

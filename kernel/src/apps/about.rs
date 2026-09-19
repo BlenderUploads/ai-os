@@ -53,14 +53,7 @@ impl App for About {
 
         let mut y = 98;
         for (label, value) in FACTS {
-            surface.glyph(
-                glyph::BULLET,
-                12,
-                y,
-                palette::AMBER_DIM,
-                Weight::Regular,
-                1,
-            );
+            surface.glyph(glyph::BULLET, 12, y, palette::AMBER_DIM, Weight::Regular, 1);
             surface.text(label, 28, y, palette::CYAN);
             surface.text(value, 28 + 12 * 8, y, palette::TEXT);
             y += 18;
@@ -92,11 +85,7 @@ impl App for About {
 
         // A slowly sweeping phosphor line, so the window is visibly alive.
         let sweep = ((self.frame / 2) % (width as u64 + 80)) as i32 - 40;
-        surface.fill_rect_blend(
-            Rect::new(sweep, 84, 40, 1),
-            palette::AMBER,
-            140,
-        );
+        surface.fill_rect_blend(Rect::new(sweep, 84, 40, 1), palette::AMBER, 140);
 
         self.dirty = false;
     }

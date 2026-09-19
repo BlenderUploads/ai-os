@@ -522,7 +522,12 @@ impl Desktop {
         };
 
         fb::with_back(|screen| {
-            let bar = Rect::new(0, height - theme::TASKBAR_HEIGHT, width, theme::TASKBAR_HEIGHT);
+            let bar = Rect::new(
+                0,
+                height - theme::TASKBAR_HEIGHT,
+                width,
+                theme::TASKBAR_HEIGHT,
+            );
             screen.reset_clip();
             screen.gradient_v(
                 bar,
@@ -540,14 +545,7 @@ impl Desktop {
                 Weight::Regular,
                 1,
             );
-            screen.text_ex(
-                "HALCYON",
-                26,
-                bar.y + 6,
-                palette::AMBER,
-                Weight::Bold,
-                1,
-            );
+            screen.text_ex("HALCYON", 26, bar.y + 6, palette::AMBER, Weight::Bold, 1);
             screen.vline(96, bar.y + 4, theme::TASKBAR_HEIGHT - 8, palette::BORDER);
 
             // One button per window.
@@ -578,7 +576,14 @@ impl Desktop {
                 } else {
                     palette::TEXT_DIM
                 };
-                screen.glyph(window.icon, rect.x + 5, rect.y + 2, color, Weight::Regular, 1);
+                screen.glyph(
+                    window.icon,
+                    rect.x + 5,
+                    rect.y + 2,
+                    color,
+                    Weight::Regular,
+                    1,
+                );
                 let previous = screen.set_clip(Rect::new(rect.x + 18, rect.y, rect.w - 22, rect.h));
                 screen.text(&window.title, rect.x + 18, rect.y + 2, color);
                 screen.set_clip(previous);
@@ -632,7 +637,12 @@ impl Desktop {
             }
             digits[..count].reverse();
             if let Ok(text) = core::str::from_utf8(&digits[..count]) {
-                screen.text(text, width - 8 * 8 - 12 - 60, bar.y + 6, palette::TEXT_FAINT);
+                screen.text(
+                    text,
+                    width - 8 * 8 - 12 - 60,
+                    bar.y + 6,
+                    palette::TEXT_FAINT,
+                );
             }
         });
     }

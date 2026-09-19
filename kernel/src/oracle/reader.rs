@@ -152,7 +152,10 @@ fn atom(token: &str) -> Value {
     }
 
     // Integers, including 0x-prefixed and negative.
-    if let Some(hex) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) {
+    if let Some(hex) = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+    {
         if !hex.is_empty() {
             if let Ok(value) = i64::from_str_radix(hex, 16) {
                 return Value::Int(value);

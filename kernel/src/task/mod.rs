@@ -141,7 +141,10 @@ fn prepare_stack(stack: &mut [u8], entry: extern "C" fn(u64), argument: u64) -> 
 /// running context actually has a saved frame to point at.
 pub fn init() {
     let mut scheduler = SCHEDULER.lock();
-    assert!(scheduler.threads.is_empty(), "scheduler already initialised");
+    assert!(
+        scheduler.threads.is_empty(),
+        "scheduler already initialised"
+    );
     scheduler.threads.push(Thread {
         id: 0,
         name: String::from("kernel"),

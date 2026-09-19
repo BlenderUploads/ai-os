@@ -142,7 +142,10 @@ impl Shell {
                         "this machine did not respond to any shutdown route we know",
                         palette::WARN
                     ),
-                    Line::new("it is safe to switch it off at the mains".to_string(), palette::TEXT_DIM),
+                    Line::new(
+                        "it is safe to switch it off at the mains".to_string(),
+                        palette::TEXT_DIM
+                    ),
                 ]
             }
             "env" => self.environment(),
@@ -173,10 +176,7 @@ impl Shell {
                 }
                 speaker::error_tone();
                 alloc::vec![
-                    Line::new(
-                        format!("{}: not a command", command),
-                        palette::ERROR
-                    ),
+                    Line::new(format!("{}: not a command", command), palette::ERROR),
                     Line::new(
                         "try `help`, or `ask` followed by a question".to_string(),
                         palette::TEXT_DIM
@@ -296,7 +296,11 @@ impl Shell {
             ));
         }
         lines.push(Line::new(
-            format!("  {} file(s), {} bytes", lines.len(), filesystem.total_bytes()),
+            format!(
+                "  {} file(s), {} bytes",
+                lines.len(),
+                filesystem.total_bytes()
+            ),
             palette::TEXT_FAINT,
         ));
         lines
@@ -477,11 +481,7 @@ impl Shell {
             Line::new(
                 format!(
                     "  nx:{}  pat:{}  sse2:{}  apic:{}  invariant-tsc:{}",
-                    info.has_nx,
-                    info.has_pat,
-                    info.has_sse2,
-                    info.has_apic,
-                    info.has_invariant_tsc
+                    info.has_nx, info.has_pat, info.has_sse2, info.has_apic, info.has_invariant_tsc
                 ),
                 palette::TEXT_DIM
             ),
@@ -506,7 +506,10 @@ impl Shell {
         let duration: u64 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(120);
         speaker::beep(frequency, duration.min(2000));
         alloc::vec![Line::new(
-            format!("{} Hz for {} ms (silent if this machine has no speaker)", frequency, duration),
+            format!(
+                "{} Hz for {} ms (silent if this machine has no speaker)",
+                frequency, duration
+            ),
             palette::TEXT_DIM
         )]
     }

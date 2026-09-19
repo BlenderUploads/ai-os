@@ -1,0 +1,150 @@
+# How HALCYON is put together
+
+A tour from the first instruction to the desktop, in the order things happen.
+
+## 1. The bootloader hands over
+
+GRUB loads the kernel through **Multiboot2** and enters at `_start` in 32-bit
+protected mode with paging off. Two consequences shape everything early:
+
+- The entry point must be reachable from a 32-bit register, so the bootstrap is
+  linked low (1 MiB) even though the rest of the kernel is linked for the
+  higher half. CI checks this.
+- The kernel is an ELF64 whose higher-half segments carry a *physical* load
+  address via `AT()` in the linker script. GRUB's ELF loader honours `p_paddr`,
+  which is what lets one image be linked at `0xFFFFFFFF80000000` and loaded at
+  `0x100000`.
+
+`kernel/src/boot/boot.S` validates the multiboot magic, confirms the CPU has
+long mode via CPUID leaf `0x80000001`, builds boot page tables, and switches on
+long mode. See [MEMORY-MAP.md](MEMORY-MAP.md) for the addresses.
+
+Two details matter and are easy to get wrong:
+
+- **SSE must be enabled before any Rust runs.** The target is built soft-float,
+  but the FPU still has to be in a sane state, so `CR0.EM` is cleared and
+  `CR4.OSFXSR` set in the 64-bit stub.
+- **The multiboot pointer must survive the transition.** It is moved out of
+  `%rbp` immediately, because the first thing a compiler does with `%rbp` is
+  use it as a frame pointer. This was an actual bug during development: the
+  tag walk silently read zeros.
+
+## 2. Interrupts
+
+`arch/gdt.rs` loads a GDT with a TSS supplying the interrupt stack table. Double
+faults and page faults get their own stacks, which is the difference between
+seeing a useful error and watching the machine triple-fault.
+
+`arch/isr.S` generates all 256 entry points with `.rept`, each padded to exactly
+16 bytes, so the IDT is filled arithmetically as `isr_stub_table + vector * 16`
+instead of needing 256 labels. `idt::init` asserts the table really spans
+`256 * STUB_STRIDE`, because a stub that outgrew its slot would silently point
+every later vector into the middle of another one.
+
+The dispatcher has an unusual signature:
+
+```rust
+extern "C" fn interrupt_dispatch(frame: *mut TrapFrame) -> *mut TrapFrame
+```
+
+It returns the frame to restore. `isr_common` does `mov rsp, rax` before popping
+registers, so returning a *different* frame switches the machine to a different
+stack. This is the whole context-switch mechanism (see §5).
+
+Interrupts are the legacy 8259 PIC remapped to vectors 32..47, not the APIC.
+HALCYON is single-CPU, and the PIC is the controller every machine old enough to
+be interesting still implements correctly. IRQ7 and IRQ15 are checked against
+the in-service register so spurious interrupts are not acknowledged.
+
+## 3. Memory
+
+Three layers, in `kernel/src/mm/`:
+
+**Frames** (`frame.rs`) — one bit per 4 KiB frame. The bitmap starts entirely
+set and is cleared only for regions the firmware calls usable, so holes in the
+memory map are reserved by construction rather than by enumeration. The kernel
+image, the low 1 MiB, the initrd and the bitmap itself are then claimed back.
+
+**Paging** (`paging.rs`) — builds the real address space and switches CR3. The
+bootstrap's identity map is *not* carried over: a stray write through a low
+pointer should fault, not quietly corrupt the first 4 GiB. Kernel sections get
+honest permissions (text RX, rodata R, data/bss RW+NX).
+
+One subtlety worth knowing: the frame allocator's bitmap pointer is a bare
+physical address that only works under the bootstrap mapping, so it is rebased
+onto the physical map in the same breath as the CR3 switch. Without that the
+very next allocation page-faults.
+
+The framebuffer is mapped write-combining through PAT entry 4 where the CPU
+supports it. On real hardware this is the difference between a usable desktop
+and a slideshow.
+
+**Heap** (`heap.rs`) — an address-sorted free list that coalesces with both
+neighbours on release. Every allocation is rounded to 16 bytes and aligned to at
+least 16, which is what makes it leak-free: padding produced when honouring a
+larger alignment is itself a multiple of 16, so it is either zero or big enough
+to return to the list. The heap grows by mapping fresh frames, up to 512 MiB.
+
+## 4. Graphics
+
+Everything draws into a RAM `Surface` and one pass pushes it to the screen.
+Read-modify-write against uncached video memory is ruinous on real hardware, so
+the compositor never does it.
+
+`Surface` carries a clip rectangle and the full primitive set. Window contents
+and the screen are the same type, which is why the widget code never knows where
+it will end up.
+
+The CRT pass darkens alternate scanlines. It runs over the whole screen every
+frame, so it avoids the divide in `palette::scale`: subtracting `c >> 2` per
+channel is a shift, a mask and a subtract. The mask stops each channel's borrow
+bleeding into the one below. The vignette is far more expensive and is baked
+once into a cached backdrop surface that is blitted per frame.
+
+The font is drawn in `tools/mkfont.py` and generated into a committed
+`font_data.rs`. See [FONT.md](FONT.md).
+
+## 5. Threads
+
+Given §2, a thread is a stack with a saved trap frame on it, and a context
+switch is the timer handler returning a different pointer. `prepare_stack`
+synthesises a frame with `IF` already set, plus a return address pointing at
+`thread_exit` so a thread function that simply returns is cleaned up rather than
+jumping into nothing.
+
+Scheduling is round-robin at the 1 kHz timer tick, with `int 0x80` as an
+explicit yield. The idle thread is skipped in the normal rotation and chosen
+only when nothing else can run, where it halts the CPU until the next interrupt.
+
+`reap()` never collects the running thread — we are executing on its stack.
+
+## 6. The desktop
+
+One thread owns everything: it drains the input queues, lets each app tick,
+repaints any window whose app reports itself dirty, composites, and sleeps to
+pace itself at roughly 30 fps.
+
+Windows are kept bottom-to-top in a vector, so the last is on top and hit
+testing walks backwards. Apps implement a small trait (`ui/window.rs`) and draw
+into their own surface. See [ADDING-AN-APP.md](ADDING-AN-APP.md).
+
+The `App` trait is deliberately **not** `Send`: the desktop and every app it owns
+run on one thread, and requiring `Send` would rule out ORACLE's `Rc`-based
+environments for no benefit.
+
+## 7. ORACLE
+
+A small Lisp (`kernel/src/oracle/`) plus a keyword-matched persona. Lists are
+vectors rather than cons pairs; tail positions loop rather than recurse. See
+[ORACLE.md](ORACLE.md).
+
+## What is deliberately missing
+
+- **No disk writes.** There is no block-device write path anywhere in the tree.
+  This is what makes booting HALCYON on a real machine safe.
+- **No network stack.** No driver, no TCP, no sockets.
+- **No USB.** Input is PS/2 via the 8042. See [HARDWARE.md](HARDWARE.md) for
+  what that means for your laptop.
+- **No user mode.** Everything runs in ring 0. The GDT has the ring-3
+  descriptors and the TSS has `rsp0` plumbed, but nothing uses them yet.
+- **No SMP.** One CPU.

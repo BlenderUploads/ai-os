@@ -1,0 +1,85 @@
+# Capture the screenshots used in the README.
+#
+# Each application is shot on its own: close whatever is open, launch one,
+# exercise it, photograph it. That is far more reliable than trying to arrange
+# cascaded windows by dragging title bars whose positions shift as more
+# windows open.
+
+wait 1.5
+shot desktop
+
+# --- terminal: ORACLE as a language, and as a persona ---
+type (define (square x) (* x x))
+wait 0.4
+type (map square (range 1 9))
+wait 0.4
+type (fold + 0 (range 101))
+wait 0.4
+type (filter (lambda (n) (= 0 (mod n 3))) (range 20))
+wait 0.4
+type ask what is halcyon
+wait 1.4
+shot terminal
+
+# --- system monitor ---
+keys ctrl-w
+wait 0.4
+keys alt-tab
+wait 0.3
+keys ctrl-w
+wait 0.5
+keys f2
+wait 2.5
+shot monitor
+
+# --- files ---
+keys ctrl-w
+wait 0.4
+keys f3
+wait 1.2
+keys down
+wait 0.8
+shot files
+
+# --- editor ---
+keys ret
+wait 1.4
+keys end
+wait 0.2
+type  -- edited live in HALCYON
+wait 0.6
+shot editor
+
+# --- paint ---
+keys ctrl-w
+wait 0.4
+keys ctrl-w
+wait 0.4
+keys f5
+wait 1.2
+drag 260 320 480 480
+wait 0.3
+drag 480 320 260 480
+wait 0.3
+drag 260 400 480 400
+wait 0.3
+keys 1
+wait 0.2
+drag 300 350 440 350
+wait 0.6
+shot paint
+
+# --- snake ---
+keys ctrl-w
+wait 0.4
+keys f6
+wait 1.2
+keys right
+wait 1.4
+keys down
+wait 1.0
+keys right
+wait 1.0
+keys up
+wait 0.8
+shot snake

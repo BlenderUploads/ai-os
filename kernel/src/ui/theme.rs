@@ -108,7 +108,11 @@ pub fn draw_frame(surface: &mut Surface, frame: Rect, title: &str, focused: bool
         bar.x + 6 + CELL_W + 4,
         bar.y + 3,
         text_color,
-        if focused { Weight::Bold } else { Weight::Regular },
+        if focused {
+            Weight::Bold
+        } else {
+            Weight::Regular
+        },
         1,
     );
 

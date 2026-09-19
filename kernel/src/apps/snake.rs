@@ -182,7 +182,10 @@ impl App for Snake {
         let height = surface.height as i32;
 
         // Header.
-        surface.fill_rect(Rect::new(0, 0, width, HEADER), palette::rgb(0x12, 0x18, 0x28));
+        surface.fill_rect(
+            Rect::new(0, 0, width, HEADER),
+            palette::rgb(0x12, 0x18, 0x28),
+        );
         surface.hline(0, HEADER - 1, width, palette::BORDER);
         surface.text_ex(
             &format!("score {}", self.score),
@@ -192,7 +195,12 @@ impl App for Snake {
             Weight::Bold,
             1,
         );
-        surface.text(&format!("best {}", self.best), 8 + 14 * 8, 3, palette::TEXT_DIM);
+        surface.text(
+            &format!("best {}", self.best),
+            8 + 14 * 8,
+            3,
+            palette::TEXT_DIM,
+        );
 
         // Board, centred and square-celled.
         let cell = ((width / GRID_W).min((height - HEADER) / GRID_H)).max(3);
@@ -209,7 +217,12 @@ impl App for Snake {
 
         // Food, pulsing.
         surface.fill_rect(
-            Rect::new(ox + self.food.0 * cell + 1, oy + self.food.1 * cell + 1, cell - 2, cell - 2),
+            Rect::new(
+                ox + self.food.0 * cell + 1,
+                oy + self.food.1 * cell + 1,
+                cell - 2,
+                cell - 2,
+            ),
             palette::ERROR,
         );
 

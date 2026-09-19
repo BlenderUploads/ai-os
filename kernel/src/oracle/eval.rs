@@ -93,7 +93,9 @@ impl Interpreter {
                             }
                             "if" => {
                                 if args.len() < 2 {
-                                    return Err("if needs a condition and a then-branch".to_string());
+                                    return Err(
+                                        "if needs a condition and a then-branch".to_string()
+                                    );
                                 }
                                 let test = self.eval(args[0].clone(), &env)?;
                                 if test.is_truthy() {

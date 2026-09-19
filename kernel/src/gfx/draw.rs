@@ -212,9 +212,15 @@ impl Surface {
         self.fill_rect(Rect::new(rect.right() - 1, rect.y + 1, 1, rect.h - 2), fill);
 
         self.fill_rect(Rect::new(rect.x + 1, rect.y, rect.w - 2, 1), border);
-        self.fill_rect(Rect::new(rect.x + 1, rect.bottom() - 1, rect.w - 2, 1), border);
+        self.fill_rect(
+            Rect::new(rect.x + 1, rect.bottom() - 1, rect.w - 2, 1),
+            border,
+        );
         self.fill_rect(Rect::new(rect.x, rect.y + 1, 1, rect.h - 2), border);
-        self.fill_rect(Rect::new(rect.right() - 1, rect.y + 1, 1, rect.h - 2), border);
+        self.fill_rect(
+            Rect::new(rect.right() - 1, rect.y + 1, 1, rect.h - 2),
+            border,
+        );
     }
 
     pub fn hline(&mut self, x: i32, y: i32, len: i32, color: Color) {
@@ -388,8 +394,8 @@ impl Surface {
         }
         for row in area.y..area.bottom() {
             for column in area.x..area.right() {
-                let pixel = source.pixels
-                    [(row - y) as usize * source.width + (column - x) as usize];
+                let pixel =
+                    source.pixels[(row - y) as usize * source.width + (column - x) as usize];
                 if pixel != key {
                     self.pixels[row as usize * self.width + column as usize] = pixel;
                 }

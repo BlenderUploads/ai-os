@@ -80,7 +80,9 @@ unsafe fn entry_ptr(table_phys: u64, index: usize) -> *mut u64 {
 unsafe fn next_table(table_phys: u64, index: usize, frames: &mut FrameAllocator) -> u64 {
     let entry = entry_ptr(table_phys, index);
     if *entry & PRESENT == 0 {
-        let frame = frames.alloc().expect("out of physical frames while mapping");
+        let frame = frames
+            .alloc()
+            .expect("out of physical frames while mapping");
         zero_frame(frame);
         // Intermediate entries stay permissive; the leaf decides. NX on a
         // parent would forbid execution of everything beneath it.

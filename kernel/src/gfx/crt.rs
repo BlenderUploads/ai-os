@@ -167,14 +167,7 @@ pub fn draw_fault_screen(name: &str, trap: &TrapFrame, cr2: Option<u64>) {
     let mut y = panel.y + 24;
     let x = panel.x + 24;
 
-    surface.text_ex(
-        "HALCYON HAS STOPPED",
-        x,
-        y,
-        palette::ERROR,
-        Weight::Bold,
-        2,
-    );
+    surface.text_ex("HALCYON HAS STOPPED", x, y, palette::ERROR, Weight::Bold, 2);
     y += 44;
     surface.hline(x, y, panel.w - 48, palette::rgb(0x55, 0x12, 0x18));
     y += 16;
@@ -214,7 +207,12 @@ pub fn draw_fault_screen(name: &str, trap: &TrapFrame, cr2: Option<u64>) {
         let mut column = x;
         for (label, value) in pair {
             surface.text(label, column, y, palette::rgb(0x9A, 0x50, 0x58));
-            surface.text(buffer.hex(*value), column + 4 * 8, y, palette::rgb(0xE8, 0xA8, 0xB0));
+            surface.text(
+                buffer.hex(*value),
+                column + 4 * 8,
+                y,
+                palette::rgb(0xE8, 0xA8, 0xB0),
+            );
             column += 28 * 8;
         }
         y += GLYPH_HEIGHT as i32 + 2;

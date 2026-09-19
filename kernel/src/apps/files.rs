@@ -134,7 +134,9 @@ impl App for Files {
             // Trim from the left so the filename stays visible.
             let available = ((split - 24 - 6 * CELL_W) / CELL_W).max(4) as usize;
             let name: String = if path.chars().count() > available {
-                path.chars().skip(path.chars().count() - available).collect()
+                path.chars()
+                    .skip(path.chars().count() - available)
+                    .collect()
             } else {
                 path.clone()
             };

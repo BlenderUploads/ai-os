@@ -163,7 +163,11 @@ fn handle_exception(trap: &mut TrapFrame) -> ! {
         crate::serial_println!(
             "  faulting address {:#018x} ({}, {}, {})",
             cr2,
-            if code & 1 != 0 { "protection violation" } else { "not present" },
+            if code & 1 != 0 {
+                "protection violation"
+            } else {
+                "not present"
+            },
             if code & 2 != 0 { "write" } else { "read" },
             if code & 4 != 0 { "user" } else { "kernel" },
         );
@@ -182,5 +186,9 @@ fn handle_exception(trap: &mut TrapFrame) -> ! {
     );
     crate::serial_println!("  rbp={:#018x} r8 ={:#018x}", trap.rbp, trap.r8);
 
-    crate::panic_screen::fault(name, trap, if vector == 14 { Some(read_cr2()) } else { None })
+    crate::panic_screen::fault(
+        name,
+        trap,
+        if vector == 14 { Some(read_cr2()) } else { None },
+    )
 }

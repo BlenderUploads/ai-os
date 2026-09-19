@@ -1,0 +1,94 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and test tooling
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            qemu-system-x86 xorriso mtools grub-pc-bin grub-efi-amd64-bin \
+            grub-common ovmf dosfstools
+
+      - name: Install the bare-metal Rust target
+        run: rustup target add x86_64-unknown-none
+
+      - name: Check formatting
+        run: cd kernel && cargo fmt --check
+        continue-on-error: true
+
+      - name: Build the kernel and ISO
+        run: make iso
+
+      - name: Verify the kernel image is laid out as GRUB expects
+        run: |
+          ELF=kernel/target/x86_64-unknown-none/release/halcyon
+          readelf -h "$ELF" | grep -q 'Type:.*EXEC' \
+            || { echo "kernel is not ET_EXEC; GRUB would refuse it"; exit 1; }
+          # The entry point runs in 32-bit protected mode, so it must be
+          # reachable from a 32-bit register.
+          ENTRY=$(readelf -h "$ELF" | awk '/Entry point/ {print $NF}')
+          python3 -c "import sys; sys.exit(0 if int('$ENTRY',16) < 2**32 else 1)" \
+            || { echo "entry point $ENTRY is above 4 GiB"; exit 1; }
+          echo "kernel image OK (entry $ENTRY)"
+
+      - name: Boot test (legacy BIOS)
+        run: |
+          python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
+            --boot-wait 20 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
+            --expect SCHED-OK --screenshots build/shots
+
+      - name: Boot test (UEFI)
+        run: |
+          python3 tools/smoke.py --iso build/halcyon.iso --firmware uefi \
+            --boot-wait 28 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
+            --screenshots build/shots
+
+      - name: Fault handler test
+        run: |
+          python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
+            --boot-wait 18 --grub-entry 2 --allow "CPU EXCEPTION" \
+            --expect "faulting address" --screenshots build/shots
+
+      - name: Desktop interaction test
+        run: |
+          python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
+            --boot-wait 20 --expect HALCYON-DESKTOP-OK \
+            --script tools/scripts/terminal.txt --screenshots build/shots
+
+      - name: Checksum
+        run: |
+          cd build && sha256sum halcyon.iso | tee halcyon.iso.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: halcyon-iso
+          path: |
+            build/halcyon.iso
+            build/halcyon.iso.sha256
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: halcyon-screenshots
+          path: build/shots/*.png
+          if-no-files-found: warn
+
+      - name: Publish a release for a version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/halcyon.iso
+            build/halcyon.iso.sha256
+          generate_release_notes: true
