@@ -31,6 +31,15 @@ use bootscreen::{BootScreen, Status};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How to switch this machine off, worked out from ACPI during boot.
+static POWER_OFF: sync::SpinLock<Option<arch::acpi::PowerOff>> = sync::SpinLock::new(None);
+
+/// Ask the firmware to power the machine down. Returns only if nothing worked.
+pub fn power_off() {
+    let config = *POWER_OFF.lock();
+    arch::acpi::power_off(config);
+}
+
 /// Entry point, called from the bootstrap in `boot/boot.S` once the CPU is in
 /// long mode and running out of the higher half.
 #[no_mangle]
@@ -163,6 +172,20 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         ),
     );
 
+    let acpi = info.rsdp.and_then(|rsdp| unsafe { arch::acpi::discover(rsdp) });
+    *POWER_OFF.lock() = acpi;
+    screen.step(
+        if acpi.is_some() { Status::Ok } else { Status::Warn },
+        match acpi {
+            Some(config) => format!(
+                "acpi: shutdown via PM1a {:#x}, S5 type {}",
+                config.pm1a_control,
+                config.slp_typ_a >> 10
+            ),
+            None => format!("acpi: no _S5 found; shutdown will use fallback ports"),
+        },
+    );
+
     task::init();
     match selftest_threads() {
         Ok(report) => screen.step(Status::Ok, report),
@@ -185,7 +208,10 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
     }
 
     screen.step(Status::Ok, format!("starting the desktop"));
-    arch::pit::delay_ms(600);
+    if !info.cmdline().contains("quiet") {
+        drivers::speaker::boot_chime();
+    }
+    arch::pit::delay_ms(400);
 
     run_desktop(&info)
 }

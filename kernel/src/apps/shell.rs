@@ -62,6 +62,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("beep [freq] [ms]", "the PC speaker"),
     ("clear", "clear the scrollback"),
     ("run <app>", "open an application window"),
+    ("reboot", "restart the machine"),
+    ("poweroff", "shut the machine down"),
     ("env", "names bound in ORACLE"),
     ("lisp", "the ORACLE language reference"),
     ("exit", "close this terminal"),
@@ -128,6 +130,21 @@ impl Shell {
             "pci" => self.pci(),
             "beep" => self.beep(rest),
             "lisp" => self.lisp_reference(),
+            "reboot" => {
+                speaker::beep(660, 120);
+                crate::arch::acpi::reboot();
+            }
+            "poweroff" | "shutdown" | "halt" => {
+                speaker::beep(440, 160);
+                crate::power_off();
+                alloc::vec![
+                    Line::new(
+                        "this machine did not respond to any shutdown route we know",
+                        palette::WARN
+                    ),
+                    Line::new("it is safe to switch it off at the mains".to_string(), palette::TEXT_DIM),
+                ]
+            }
             "env" => self.environment(),
             "clear" => {
                 effects.clear = true;

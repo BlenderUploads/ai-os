@@ -1,0 +1,56 @@
+# Open every application and exercise it.
+
+wait 1
+
+# Close the two windows that open at boot so the shots are uncluttered.
+keys ctrl-w
+wait 0.4
+keys ctrl-w
+wait 0.6
+
+# Files browser.
+keys f3
+wait 1.0
+keys down down
+wait 0.6
+shot files
+
+# Editor, opened on the selected file.
+keys ret
+wait 1.2
+type HALCYON editor
+wait 0.5
+shot editor
+
+# Paint: pick a colour and scribble.
+keys ctrl-w
+wait 0.3
+keys f5
+wait 1.0
+drag 300 300 500 400
+wait 0.4
+drag 500 300 300 400
+wait 0.6
+shot paint
+
+# Snake: start it and let it run.
+keys ctrl-w
+wait 0.3
+keys f6
+wait 1.0
+keys right
+wait 1.5
+keys down
+wait 1.0
+keys left
+wait 1.0
+shot snake
+
+# Everything at once.
+keys f1
+wait 1.0
+keys f2
+wait 1.0
+keys f7
+wait 1.2
+shot everything

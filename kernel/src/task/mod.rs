@@ -50,6 +50,9 @@ struct Scheduler {
     next_id: u64,
     switches: u64,
     started: bool,
+    /// Index of the idle thread, which is only scheduled when nothing else can
+    /// run. It halts the CPU, so an idle HALCYON draws almost no power.
+    idle: usize,
 }
 
 impl Scheduler {
@@ -60,6 +63,7 @@ impl Scheduler {
             next_id: 0,
             switches: 0,
             started: false,
+            idle: usize::MAX,
         }
     }
 
@@ -73,20 +77,23 @@ impl Scheduler {
                 }
             }
         }
+        // Round-robin from just after the current thread, skipping the idle
+        // thread so it only runs when there is genuinely nothing else.
         for offset in 1..=count {
             let index = (self.current + offset) % count;
-            match self.threads[index].state {
-                State::Ready => return index,
-                _ => continue,
+            if index == self.idle {
+                continue;
+            }
+            if self.threads[index].state == State::Ready {
+                return index;
             }
         }
-        // Nothing else can run; stay where we are if we still can, else idle
-        // (thread 0 is the idle thread and is always runnable).
-        if matches!(self.threads[self.current].state, State::Running) {
-            self.current
-        } else {
-            0
+        if self.threads[self.current].state == State::Running && self.current != self.idle {
+            return self.current;
         }
+        // Nothing is runnable: park on the idle thread, which halts the CPU
+        // until the next interrupt rather than spinning through yields.
+        self.idle
     }
 }
 
@@ -146,6 +153,18 @@ pub fn init() {
     });
     scheduler.next_id = 1;
     drop(scheduler);
+
+    // The idle thread must exist before the tick hook is installed, or the
+    // first tick could look for an idle index that is not there yet.
+    let idle_id = spawn("idle", idle_thread, 0);
+    {
+        let mut scheduler = SCHEDULER.lock();
+        scheduler.idle = scheduler
+            .threads
+            .iter()
+            .position(|thread| thread.id == idle_id)
+            .unwrap_or(0);
+    }
 
     pit::set_tick_hook(tick);
 }
@@ -234,10 +253,24 @@ pub fn sleep_ms(ms: u64) {
         scheduler.threads[current].state = State::Sleeping(deadline);
     }
     yield_now();
-    // A tick could have fired between setting the deadline and yielding; loop
-    // until the time has genuinely passed.
+    // A tick could have fired between setting the deadline and yielding, so
+    // the sleep may end early. Re-arm and give up the CPU again rather than
+    // spinning, which would keep the idle thread from ever halting.
     while pit::ticks() < deadline {
+        {
+            let mut scheduler = SCHEDULER.lock();
+            let current = scheduler.current;
+            scheduler.threads[current].state = State::Sleeping(deadline);
+        }
         yield_now();
+    }
+}
+
+/// Runs when nothing else can. `hlt` stops the CPU until the next interrupt,
+/// which on a laptop is the difference between a warm palm rest and a cold one.
+extern "C" fn idle_thread(_: u64) {
+    loop {
+        crate::arch::port::halt();
     }
 }
 
@@ -318,11 +351,16 @@ pub fn reap() -> usize {
         .retain(|thread| thread.state != State::Finished || thread.id == current_id);
     let after = scheduler.threads.len();
     if before != after {
-        // Indices shifted; find where the running thread went.
+        // Indices shifted; re-find both the running thread and the idle one.
         scheduler.current = scheduler
             .threads
             .iter()
             .position(|thread| thread.id == current_id)
+            .unwrap_or(0);
+        scheduler.idle = scheduler
+            .threads
+            .iter()
+            .position(|thread| thread.name == "idle")
             .unwrap_or(0);
     }
     before - after
