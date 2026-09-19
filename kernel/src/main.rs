@@ -6,9 +6,12 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 pub mod arch;
 pub mod boot;
 pub mod drivers;
+pub mod mm;
 pub mod panic_screen;
 pub mod sync;
 
@@ -117,6 +120,32 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         serial_println!("[intr] WARNING: timer did not advance");
     }
 
+    let memory = unsafe { mm::init(&info) };
+    let (total, total_unit) = mm::format_bytes(memory.total_bytes);
+    let (usable, usable_unit) = mm::format_bytes(memory.usable_bytes);
+    serial_println!(
+        "[mm  ] {} {} addressable, {} {} usable RAM",
+        total,
+        total_unit,
+        usable,
+        usable_unit
+    );
+    serial_println!(
+        "[mm  ] address space live: physmap {:#x}, heap {:#x}, framebuffer {:#x}",
+        mm::paging::PHYSMAP_BASE,
+        mm::paging::HEAP_BASE,
+        memory.space.framebuffer_virt
+    );
+    serial_println!(
+        "[mm  ] framebuffer caching: {}",
+        if memory.space.write_combining {
+            "write-combining (PAT entry 4)"
+        } else {
+            "uncached (no PAT)"
+        }
+    );
+    selftest_heap();
+
     serial_println!("[boot] HALCYON-BOOT-OK");
 
     // A deliberate fault, only when asked for: `selftest=fault` on the GRUB
@@ -135,6 +164,70 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
     serial_println!("[boot] nothing further implemented yet; parking.");
 
     port::park()
+}
+
+/// Exercise the allocator hard enough to catch the classic failures: a
+/// free-list that does not coalesce, a leak on drop, or alignment padding that
+/// never comes back.
+fn selftest_heap() {
+    use alloc::collections::BTreeMap;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    let before = mm::heap::ALLOCATOR.stats();
+
+    {
+        let mut numbers: Vec<u64> = Vec::new();
+        for value in 0..50_000u64 {
+            numbers.push(value * 3);
+        }
+        assert_eq!(numbers.iter().sum::<u64>(), (0..50_000u64).sum::<u64>() * 3);
+
+        let mut text = String::new();
+        for _ in 0..1000 {
+            text.push_str("HALCYON ");
+        }
+        assert_eq!(text.len(), 8000);
+
+        let mut map: BTreeMap<u64, String> = BTreeMap::new();
+        for key in 0..2000u64 {
+            let mut value = String::from("entry-");
+            value.push((b'0' + (key % 10) as u8) as char);
+            map.insert(key, value);
+        }
+        assert_eq!(map.len(), 2000);
+        assert_eq!(map.get(&7).map(|s| s.as_str()), Some("entry-7"));
+
+        // Over-aligned allocations: the padding in front must return to the
+        // free list, not vanish.
+        let mut aligned: Vec<Vec<u8>> = Vec::new();
+        for size in [64usize, 256, 1024, 4096] {
+            let mut block = Vec::with_capacity(size);
+            block.resize(size, 0xA5);
+            aligned.push(block);
+        }
+        assert_eq!(aligned.len(), 4);
+    }
+
+    let after = mm::heap::ALLOCATOR.stats();
+    let leaked = after.live_allocations.saturating_sub(before.live_allocations);
+    let (mapped, mapped_unit) = mm::format_bytes(after.mapped);
+    serial_println!(
+        "[mm  ] heap self-test: {} allocations served, {} {} mapped, {} free blocks",
+        after.total_allocations - before.total_allocations,
+        mapped,
+        mapped_unit,
+        after.free_blocks
+    );
+    if leaked == 0 && after.allocated == before.allocated {
+        serial_println!("[mm  ] heap self-test: no leak, free list coalesced — HEAP-OK");
+    } else {
+        serial_println!(
+            "[mm  ] heap self-test: LEAK — {} allocations and {} bytes outstanding",
+            leaked,
+            after.allocated - before.allocated
+        );
+    }
 }
 
 #[panic_handler]
