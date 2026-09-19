@@ -1,0 +1,17 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+rustflags = [
+    # Fixed load address: this is a kernel, not a relocatable program.
+    "-C", "relocation-model=static",
+    "-C", "link-arg=--no-pie",
+    # Our own layout.
+    "-C", "link-arg=-T", "-C", "link-arg=linker.ld",
+    # Keep segments 4K-aligned; lld otherwise pads to 2 MiB and bloats the image.
+    "-C", "link-arg=-z", "-C", "link-arg=max-page-size=0x1000",
+    "-C", "link-arg=--gc-sections",
+]
+
+[unstable]
+# (none — HALCYON builds on stable Rust)

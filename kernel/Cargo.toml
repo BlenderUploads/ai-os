@@ -1,0 +1,27 @@
+[package]
+name = "halcyon"
+version = "0.1.0"
+edition = "2021"
+description = "HALCYON — a from-scratch x86_64 operating system"
+
+# HALCYON has no third-party dependencies, by design.
+# Everything below `core` and `alloc` is written in this repository.
+[dependencies]
+
+[[bin]]
+name = "halcyon"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+debug = true
+overflow-checks = true
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true
+debug = true
+codegen-units = 1
+overflow-checks = false

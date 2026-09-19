@@ -1,0 +1,8 @@
+HALCYON — a from-scratch operating system
+
+There is no Linux under here. The bootstrap, the paging code, the scheduler,
+the font, the compositor and the interpreter you are typing into were all
+written for this machine and nothing else.
+
+Type `help` for the command list, or `ask` followed by a question to talk to
+ORACLE. Anything in (parentheses) is evaluated as Lisp.

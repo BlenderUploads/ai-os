@@ -1,0 +1,6 @@
+build/
+kernel/target/
+*.iso
+*.ppm
+*.o
+*.log
