@@ -132,6 +132,11 @@ pub extern "C" fn interrupt_dispatch(frame: *mut TrapFrame) -> *mut TrapFrame {
         return next;
     }
 
+    // Software yield: reschedule exactly as a timer tick would.
+    if vector == crate::task::YIELD_VECTOR as u64 {
+        return crate::task::on_yield(trap);
+    }
+
     crate::serial_println!("[irq ] unexpected vector {}", vector);
     frame
 }

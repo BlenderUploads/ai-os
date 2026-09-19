@@ -13,9 +13,11 @@ pub mod boot;
 pub mod bootscreen;
 pub mod drivers;
 pub mod gfx;
+pub mod input;
 pub mod mm;
 pub mod panic_screen;
 pub mod sync;
+pub mod task;
 
 use alloc::format;
 use core::panic::PanicInfo;
@@ -139,6 +141,26 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         );
     }
 
+    let ps2 = drivers::ps2::init(!info.cmdline().contains("nomouse"));
+    drivers::keyboard::init();
+    if ps2.mouse_present {
+        drivers::mouse::init();
+    }
+    screen.step(
+        if ps2.controller_ok { Status::Ok } else { Status::Warn },
+        format!(
+            "input: 8042 {}, keyboard ready, mouse {}",
+            if ps2.controller_ok { "ok" } else { "self-test failed" },
+            if ps2.mouse_present { "ready" } else { "absent" }
+        ),
+    );
+
+    task::init();
+    match selftest_threads() {
+        Ok(report) => screen.step(Status::Ok, report),
+        Err(report) => screen.step(Status::Fail, report),
+    }
+
     serial_println!("[boot] HALCYON-BOOT-OK");
 
     if info.cmdline().contains("selftest=fault") {
@@ -259,6 +281,65 @@ fn selftest_heap() -> Result<alloc::string::String, alloc::string::String> {
             "heap: LEAK — {} allocations, {} bytes outstanding",
             leaked,
             after.allocated - before.allocated
+        ))
+    }
+}
+
+use core::sync::atomic::{AtomicU64, Ordering};
+
+static SPIN_COUNTERS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+
+extern "C" fn counter_thread(index: u64) {
+    // Deliberately never yields: only real pre-emption can stop this.
+    loop {
+        SPIN_COUNTERS[index as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Prove the scheduler actually pre-empts.
+///
+/// The spawned threads never yield, so if all three make progress while this
+/// one sleeps, the timer is genuinely switching contexts rather than the
+/// threads politely taking turns.
+fn selftest_threads() -> Result<alloc::string::String, alloc::string::String> {
+    for index in 0..3u64 {
+        task::spawn("selftest", counter_thread, index);
+    }
+
+    let before = task::total_switches();
+    task::sleep_ms(300);
+    let switches = task::total_switches() - before;
+
+    let counts: [u64; 3] = [
+        SPIN_COUNTERS[0].load(Ordering::Relaxed),
+        SPIN_COUNTERS[1].load(Ordering::Relaxed),
+        SPIN_COUNTERS[2].load(Ordering::Relaxed),
+    ];
+
+    // Retire the test threads so they stop burning time slices.
+    for thread in task::snapshot() {
+        if thread.name == "selftest" {
+            task::kill(thread.id);
+        }
+    }
+    task::reap();
+
+    let all_ran = counts.iter().all(|&count| count > 0);
+    serial_println!(
+        "[task] self-test: switches={} counts={:?}",
+        switches,
+        counts
+    );
+    if all_ran && switches >= 3 {
+        serial_println!("[task] self-test: SCHED-OK");
+        Ok(format!(
+            "scheduler: 3 threads pre-empted, {} context switches in 300 ms",
+            switches
+        ))
+    } else {
+        Err(format!(
+            "scheduler: only {} switches, counts {:?}",
+            switches, counts
         ))
     }
 }
