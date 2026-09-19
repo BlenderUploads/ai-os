@@ -2,6 +2,8 @@
 
 pub mod about;
 pub mod monitor;
+pub mod shell;
+pub mod terminal;
 
 use alloc::boxed::Box;
 use alloc::vec;
@@ -14,6 +16,14 @@ use crate::ui::window::App;
 /// Everything the launcher offers, in F-key order.
 pub fn registry() -> Vec<AppEntry> {
     vec![
+        AppEntry {
+            name: "terminal",
+            title: "Terminal",
+            icon: glyph::ARROW_RIGHT,
+            width: 660,
+            height: 420,
+            build: || Box::new(terminal::Terminal::new()) as Box<dyn App>,
+        },
         AppEntry {
             name: "monitor",
             title: "System Monitor",

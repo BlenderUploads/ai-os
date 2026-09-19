@@ -13,9 +13,11 @@ pub mod arch;
 pub mod boot;
 pub mod bootscreen;
 pub mod drivers;
+pub mod fs;
 pub mod gfx;
 pub mod input;
 pub mod mm;
+pub mod oracle;
 pub mod panic_screen;
 pub mod sync;
 pub mod task;
@@ -131,17 +133,21 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         Err(report) => screen.step(Status::Fail, report),
     }
 
-    for (index, module) in info.modules().iter().enumerate() {
-        screen.step(
-            Status::Info,
-            format!(
-                "module {}: {} KiB at {:#x}",
-                index,
-                (module.end - module.start) / 1024,
-                module.start
-            ),
-        );
+    let mut mounted = 0;
+    for module in info.modules() {
+        mounted += fs::mount_initrd(module.start, module.end);
     }
+    fs::seed_defaults();
+    let filesystem = fs::FS.lock();
+    let (fs_bytes, fs_count) = (filesystem.total_bytes(), filesystem.count());
+    drop(filesystem);
+    screen.step(
+        if mounted > 0 { Status::Ok } else { Status::Warn },
+        format!(
+            "filesystem: {} file(s) from initrd, {} total, {} bytes in RAM",
+            mounted, fs_count, fs_bytes
+        ),
+    );
 
     let ps2 = drivers::ps2::init(!info.cmdline().contains("nomouse"));
     drivers::keyboard::init();
@@ -191,9 +197,9 @@ fn run_desktop(info: &boot::BootInfo) -> ! {
 
     if !info.cmdline().contains("noautostart") {
         desktop.open("about");
-        desktop.open("monitor");
+        desktop.open("terminal");
     }
-    desktop.set_status("F1-F8 open apps  |  alt+tab switches", 6000);
+    desktop.set_status("F1 terminal  F2 monitor  F3 about  |  alt+tab switches", 8000);
 
     serial_println!("[ui  ] desktop running, {} windows", desktop.window_count());
     serial_println!("[ui  ] HALCYON-DESKTOP-OK");

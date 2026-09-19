@@ -1,0 +1,66 @@
+# Exercise the terminal, hsh and ORACLE through the QEMU monitor.
+
+wait 1
+shot desktop
+
+# The terminal opens focused at boot. Basic shell commands first.
+type help
+wait 0.6
+shot help
+
+type uptime
+wait 0.4
+type cpu
+wait 0.4
+type ls
+wait 0.6
+shot commands
+
+type cat /motd.txt
+wait 0.8
+shot motd
+
+# ORACLE as a Lisp.
+type (+ 1 2 3)
+wait 0.4
+type (define (square x) (* x x))
+wait 0.4
+type (map square (range 1 9))
+wait 0.6
+shot lisp
+
+type (fold + 0 (range 101))
+wait 0.4
+type (filter (lambda (n) (= 0 (mod n 3))) (range 20))
+wait 0.8
+shot lisp2
+
+# Tail recursion must not blow the 64 KiB kernel stack.
+type (define (down n) (if (<= n 0) 'done (down (- n 1))))
+wait 0.4
+type (down 200000)
+wait 2.5
+shot tailcall
+
+# The filesystem is writable in RAM.
+type write /home/hello.txt written from hsh
+wait 0.5
+type cat /home/hello.txt
+wait 0.6
+shot files
+
+# ORACLE as a persona.
+type ask what is halcyon
+wait 1.0
+shot ask
+
+type ask are you an llm
+wait 1.0
+shot ask2
+
+# An error should report, not crash.
+type (car 5)
+wait 0.5
+type nonsense-command
+wait 0.6
+shot errors

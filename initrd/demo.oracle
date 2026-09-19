@@ -1,0 +1,15 @@
+; ORACLE demo — paste any of these into the terminal.
+
+(define (square x) (* x x))
+(define (sum-to n) (fold + 0 (range (+ n 1))))
+
+; Tail-recursive: this runs in constant stack because tail positions loop.
+(define (count-down n)
+  (if (<= n 0)
+      'done
+      (count-down (- n 1))))
+
+(print "squares:" (map square (range 1 11)))
+(print "sum 1..100 =" (sum-to 100))
+(print "multiples of 3:" (filter (lambda (n) (= 0 (mod n 3))) (range 30)))
+(print "counting down from 100000:" (count-down 100000))

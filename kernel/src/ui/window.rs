@@ -27,7 +27,12 @@ pub struct AppResponse {
     pub launch: Option<String>,
 }
 
-pub trait App: Send {
+/// Implemented by everything that lives in a window.
+///
+/// Deliberately not `Send`: the desktop and every app it owns run on one
+/// thread, and requiring `Send` would rule out ORACLE's `Rc`-based
+/// environments for no benefit.
+pub trait App {
     fn draw(&mut self, surface: &mut Surface, focused: bool);
 
     fn on_key(&mut self, _event: &KeyEvent, _response: &mut AppResponse) {}
