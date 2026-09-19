@@ -194,6 +194,10 @@ def main():
     parser.add_argument("--memory", default="512M")
     parser.add_argument("--expect", action="append", default=[],
                         help="extra string that must appear in the serial log")
+    parser.add_argument("--allow", action="append", default=[],
+                        help="marker normally treated as fatal but expected here")
+    parser.add_argument("--grub-entry", type=int, default=0,
+                        help="select this GRUB menu entry instead of the default")
     args = parser.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="halcyon-smoke-")
@@ -226,6 +230,14 @@ def main():
 
     shots = []
     try:
+        if args.grub_entry:
+            # Wait for the menu to paint, then walk down to the wanted entry.
+            time.sleep(3.0 if args.firmware == "bios" else 8.0)
+            for _ in range(args.grub_entry):
+                monitor.cmd("sendkey down")
+                time.sleep(0.25)
+            monitor.cmd("sendkey ret")
+
         # Let GRUB time out and the kernel come up.
         deadline = time.time() + args.timeout
         settled = time.time() + args.boot_wait
@@ -293,7 +305,7 @@ def main():
         if marker not in log:
             failures.append(f"missing marker: {marker!r}")
     for marker in FORBIDDEN:
-        if marker in log:
+        if marker in log and marker not in args.allow:
             failures.append(f"forbidden marker present: {marker!r}")
 
     if failures:
