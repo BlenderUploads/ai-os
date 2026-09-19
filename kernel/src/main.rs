@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+pub mod apps;
 pub mod arch;
 pub mod boot;
 pub mod bootscreen;
@@ -18,6 +19,7 @@ pub mod mm;
 pub mod panic_screen;
 pub mod sync;
 pub mod task;
+pub mod ui;
 
 use alloc::format;
 use core::panic::PanicInfo;
@@ -176,10 +178,47 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         }
     }
 
-    screen.step(Status::Info, format!("desktop not yet implemented; idle"));
+    screen.step(Status::Ok, format!("starting the desktop"));
+    arch::pit::delay_ms(600);
 
+    run_desktop(&info)
+}
+
+/// The compositor loop. This thread owns the desktop for the rest of the
+/// machine's life.
+fn run_desktop(info: &boot::BootInfo) -> ! {
+    let mut desktop = ui::desktop::Desktop::new(apps::registry());
+
+    if !info.cmdline().contains("noautostart") {
+        desktop.open("about");
+        desktop.open("monitor");
+    }
+    desktop.set_status("F1-F8 open apps  |  alt+tab switches", 6000);
+
+    serial_println!("[ui  ] desktop running, {} windows", desktop.window_count());
+    serial_println!("[ui  ] HALCYON-DESKTOP-OK");
+
+    let mut last_report = 0u64;
     loop {
-        port::halt();
+        desktop.handle_input();
+        desktop.tick_apps();
+        desktop.compose();
+
+        // Periodic proof of life on the serial console, which is what the
+        // headless smoke test watches.
+        let uptime = arch::pit::uptime_ms();
+        if uptime - last_report >= 2000 {
+            last_report = uptime;
+            serial_println!(
+                "[ui  ] frame {} at {} ms ({} windows)",
+                desktop.frames,
+                uptime,
+                desktop.window_count()
+            );
+        }
+
+        // Aim for roughly 30 frames a second and leave the CPU to other threads.
+        task::sleep_ms(33);
     }
 }
 

@@ -193,6 +193,9 @@ fn tick(frame: &mut TrapFrame) -> *mut TrapFrame {
 
     let next = scheduler.pick_next(now);
     if next == current {
+        // Still ours. pick_next may have just woken us from a sleep, so make
+        // sure the state reflects that we are the thread actually running.
+        scheduler.threads[current].state = State::Running;
         return frame as *mut TrapFrame;
     }
 

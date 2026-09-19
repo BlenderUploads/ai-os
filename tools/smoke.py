@@ -133,6 +133,30 @@ def type_text(monitor, text, delay=0.045):
         time.sleep(delay)
 
 
+def move_to(monitor, x, y, step=180):
+    """Place the pointer at an absolute screen position.
+
+    The guest sees a PS/2 mouse, which only reports relative motion, and QEMU
+    clamps each packet's delta. So park the pointer in the top-left corner --
+    HALCYON clamps the cursor to the screen, which makes that corner a reliable
+    origin -- then walk to the target in bounded steps.
+    """
+    for _ in range(8):
+        monitor.cmd("mouse_move -200 -200")
+        time.sleep(0.02)
+    time.sleep(0.15)
+
+    remaining_x, remaining_y = int(x), int(y)
+    while remaining_x > 0 or remaining_y > 0:
+        dx = min(step, remaining_x)
+        dy = min(step, remaining_y)
+        monitor.cmd(f"mouse_move {dx} {dy}")
+        remaining_x -= dx
+        remaining_y -= dy
+        time.sleep(0.04)
+    time.sleep(0.15)
+
+
 def ppm_to_png(ppm_path, png_path):
     """Convert QEMU's PPM screendump to PNG with no image library."""
     import struct
@@ -263,6 +287,33 @@ def main():
                 verb, _, rest = step.partition(" ")
                 if verb == "type":
                     type_text(monitor, rest + "\n")
+                elif verb == "moveto":
+                    px, py = rest.split()
+                    move_to(monitor, int(px), int(py))
+                elif verb == "drag":
+                    # drag <from_x> <from_y> <to_x> <to_y>
+                    fx, fy, tx, ty = (int(value) for value in rest.split())
+                    move_to(monitor, fx, fy)
+                    monitor.cmd("mouse_button 1")
+                    time.sleep(0.25)
+                    # Walk to the target so the guest sees motion while held.
+                    steps = 8
+                    for index in range(1, steps + 1):
+                        nx = fx + (tx - fx) * index // steps
+                        ny = fy + (ty - fy) * index // steps
+                        monitor.cmd(f"mouse_move {nx - (fx + (tx - fx) * (index - 1) // steps)} "
+                                    f"{ny - (fy + (ty - fy) * (index - 1) // steps)}")
+                        time.sleep(0.06)
+                    time.sleep(0.2)
+                    monitor.cmd("mouse_button 0")
+                    time.sleep(0.3)
+                elif verb == "click":
+                    px, py = rest.split()
+                    move_to(monitor, int(px), int(py))
+                    monitor.cmd("mouse_button 1")
+                    time.sleep(0.15)
+                    monitor.cmd("mouse_button 0")
+                    time.sleep(0.3)
                 elif verb == "keys":
                     for key in rest.split():
                         monitor.cmd(f"sendkey {key}")

@@ -10,16 +10,19 @@ use super::draw::{Rect, Surface};
 use super::font::{glyph, Weight, GLYPH_HEIGHT};
 use super::palette::{self, Color};
 
-/// How much darker alternate scanlines are. 255 is no effect.
-pub const SCANLINE_STRENGTH: u8 = 214;
-
 /// Darken every other row so the display reads as a tube rather than an LCD.
+///
+/// This runs over the whole screen on every composited frame, so it avoids
+/// `palette::scale` and its divide: subtracting `c >> 2` per channel is a
+/// shift, a mask and a subtract, and darkens by a flat 25%. The mask keeps
+/// each channel's borrow from bleeding into the one below it.
 pub fn apply_scanlines(surface: &mut Surface) {
     let width = surface.width;
     for y in (1..surface.height).step_by(2) {
         let row = &mut surface.pixels[y * width..(y + 1) * width];
         for pixel in row.iter_mut() {
-            *pixel = palette::scale(*pixel, SCANLINE_STRENGTH);
+            let value = *pixel;
+            *pixel = value - ((value >> 2) & 0x003F_3F3F);
         }
     }
 }
