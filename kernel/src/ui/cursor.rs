@@ -57,3 +57,9 @@ pub fn draw(surface: &mut Surface, x: i32, y: i32, pressed: bool) {
         }
     }
 }
+
+/// The screen rectangle the pointer occupies, including its drop shadow.
+/// The compositor damages this when the pointer moves.
+pub fn bounds(x: i32, y: i32) -> crate::gfx::draw::Rect {
+    crate::gfx::draw::Rect::new(x, y, WIDTH + 2, HEIGHT + 2)
+}

@@ -4,12 +4,18 @@
 //! window state, repaints any window whose app is dirty, and composites the
 //! screen. Windows are kept bottom-to-top in `windows`, so the last entry is
 //! the one on top and hit testing walks the list backwards.
+//!
+//! Composition is skipped entirely when nothing has changed. That is what
+//! keeps an idle desktop nearly free: without it, a machine showing a static
+//! screen still burned a full-screen blit, an alpha pass per window shadow and
+//! a 3 MB copy to video memory thirty times a second.
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::arch::pit;
+use crate::arch::{cpu, pit};
 use crate::drivers::rtc;
 use crate::gfx::crt;
 use crate::gfx::draw::{Rect, Surface};
@@ -19,14 +25,34 @@ use crate::gfx::palette;
 use crate::input::{self, Key, KeyEvent};
 
 use super::cursor;
-use super::theme;
+use super::menu::{self, Action, Menu};
+use super::theme::{self, Edges};
 use super::window::{App, AppResponse, Window, WindowMouse};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Drag {
     None,
-    Move { id: u64, dx: i32, dy: i32 },
-    Resize { id: u64, dx: i32, dy: i32 },
+    Move {
+        id: u64,
+        dx: i32,
+        dy: i32,
+    },
+    Resize {
+        id: u64,
+        edges: Edges,
+        origin: Rect,
+        grab_x: i32,
+        grab_y: i32,
+    },
+}
+
+/// Where a drag would snap the window if released now.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Snap {
+    None,
+    Maximise,
+    Left,
+    Right,
 }
 
 /// One entry in the launcher.
@@ -39,25 +65,178 @@ pub struct AppEntry {
     pub build: fn() -> Box<dyn App>,
 }
 
+/// The regions that changed since the last composite.
+///
+/// Everything in the paint path already honours the surface clip, so a partial
+/// redraw is the same code with a smaller clip — and presenting only those
+/// rows is what takes pointer movement from a 3 MB copy to a few kilobytes.
+struct Damage {
+    rects: Vec<Rect>,
+    full: bool,
+}
+
+/// Past this many regions it is cheaper to merge them than to run the paint
+/// pipeline again.
+const MAX_DAMAGE_RECTS: usize = 4;
+
+impl Damage {
+    fn new() -> Self {
+        Self {
+            rects: Vec::new(),
+            full: true,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.full && self.rects.is_empty()
+    }
+
+    fn mark_full(&mut self) {
+        self.full = true;
+        self.rects.clear();
+    }
+
+    fn add(&mut self, rect: Rect) {
+        if self.full || rect.is_empty() {
+            return;
+        }
+        // A pixel of slack absorbs the shadow and border bleed around a region.
+        let rect = rect.inset(-2);
+        for existing in self.rects.iter_mut() {
+            if existing.intersect(&rect).is_empty() {
+                continue;
+            }
+            *existing = union(*existing, rect);
+            return;
+        }
+        self.rects.push(rect);
+        if self.rects.len() > MAX_DAMAGE_RECTS {
+            let merged = self
+                .rects
+                .iter()
+                .copied()
+                .reduce(union)
+                .unwrap_or(Rect::EMPTY);
+            self.rects.clear();
+            self.rects.push(merged);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.full = false;
+        self.rects.clear();
+    }
+}
+
+fn union(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    Rect::new(
+        x,
+        y,
+        a.right().max(b.right()) - x,
+        a.bottom().max(b.bottom()) - y,
+    )
+}
+
+/// Rolling frame-time history, so the taskbar can show an honest rate.
+struct FrameClock {
+    last_tsc: u64,
+    /// Nanoseconds-ish per frame, smoothed.
+    smoothed_us: u64,
+    tsc_per_us: u64,
+    composed: u64,
+    skipped: u64,
+}
+
+impl FrameClock {
+    fn new() -> Self {
+        Self {
+            last_tsc: 0,
+            smoothed_us: 0,
+            tsc_per_us: 0,
+            composed: 0,
+            skipped: 0,
+        }
+    }
+
+    /// Calibrate the timestamp counter against the PIT, which we already trust.
+    fn calibrate(&mut self) {
+        let start_tick = pit::ticks();
+        while pit::ticks() == start_tick {
+            core::hint::spin_loop();
+        }
+        let start = cpu::rdtsc();
+        let target = pit::ticks() + 50;
+        while pit::ticks() < target {
+            core::hint::spin_loop();
+        }
+        let elapsed = cpu::rdtsc() - start;
+        // 50 ticks at 1 kHz is 50_000 microseconds.
+        self.tsc_per_us = (elapsed / 50_000).max(1);
+    }
+
+    fn begin(&mut self) {
+        self.last_tsc = cpu::rdtsc();
+    }
+
+    fn end(&mut self) {
+        if self.tsc_per_us == 0 {
+            return;
+        }
+        let elapsed = cpu::rdtsc().saturating_sub(self.last_tsc) / self.tsc_per_us;
+        self.smoothed_us = if self.smoothed_us == 0 {
+            elapsed
+        } else {
+            // Exponential moving average; cheap and steady enough to read.
+            (self.smoothed_us * 7 + elapsed) / 8
+        };
+        self.composed += 1;
+    }
+
+    fn frames_per_second(&self) -> u64 {
+        if self.smoothed_us == 0 {
+            0
+        } else {
+            1_000_000 / self.smoothed_us
+        }
+    }
+
+    fn millis(&self) -> u64 {
+        self.smoothed_us / 1000
+    }
+}
+
 pub struct Desktop {
     windows: Vec<Window>,
     next_id: u64,
     focused: Option<u64>,
     cursor_x: i32,
     cursor_y: i32,
+    previous_cursor: (i32, i32),
     left_down: bool,
+    right_down: bool,
     drag: Drag,
+    snap: Snap,
     backdrop: Surface,
     width: i32,
     height: i32,
     registry: Vec<AppEntry>,
-    menu_open: bool,
-    menu_rect: Rect,
+    menu: Option<Menu>,
     /// Cascade offset for the next window opened.
     spawn_offset: i32,
     pub frames: u64,
     status: String,
     status_until: u64,
+    /// Regions that changed since the last composite.
+    damage: Damage,
+    /// Last wall-clock second painted into the taskbar.
+    last_second: u8,
+    clock: FrameClock,
+    show_fps: bool,
+    scanlines: bool,
+    last_click: u64,
+    last_click_pos: (i32, i32),
 }
 
 impl Desktop {
@@ -72,30 +251,52 @@ impl Desktop {
         crt::draw_backdrop(&mut backdrop);
         crt::apply_vignette(&mut backdrop);
 
+        let mut clock = FrameClock::new();
+        clock.calibrate();
+
         Self {
             windows: Vec::new(),
             next_id: 1,
             focused: None,
             cursor_x: width / 2,
             cursor_y: height / 2,
+            previous_cursor: (width / 2, height / 2),
             left_down: false,
+            right_down: false,
             drag: Drag::None,
+            snap: Snap::None,
             backdrop,
             width,
             height,
             registry,
-            menu_open: false,
-            menu_rect: Rect::EMPTY,
+            menu: None,
             spawn_offset: 0,
             frames: 0,
             status: String::new(),
             status_until: 0,
+            damage: Damage::new(),
+            last_second: 0xFF,
+            clock,
+            show_fps: false,
+            scanlines: true,
+            last_click: 0,
+            last_click_pos: (0, 0),
         }
     }
 
     pub fn set_status(&mut self, text: &str, ms: u64) {
         self.status = text.to_string();
         self.status_until = pit::ticks() + ms;
+        self.damage.mark_full();
+    }
+
+    /// The area windows may occupy — everything above the taskbar.
+    fn work_area(&self) -> Rect {
+        Rect::new(0, 0, self.width, self.height - theme::TASKBAR_HEIGHT)
+    }
+
+    fn screen(&self) -> Rect {
+        Rect::new(0, 0, self.width, self.height)
     }
 
     // --- window management ---
@@ -113,10 +314,11 @@ impl Desktop {
         let offset = self.spawn_offset;
         self.spawn_offset = (self.spawn_offset + 26) % 160;
 
-        let frame_width = width.min(self.width - 40);
-        let frame_height = height.min(self.height - theme::TASKBAR_HEIGHT - 40);
-        let x = (40 + offset).min(self.width - frame_width - 8);
-        let y = (40 + offset).min(self.height - theme::TASKBAR_HEIGHT - frame_height - 8);
+        let work = self.work_area();
+        let frame_width = width.min(work.w - 40);
+        let frame_height = height.min(work.h - 40);
+        let x = (40 + offset).min(work.w - frame_width - 8).max(0);
+        let y = (40 + offset).min(work.h - frame_height - 8).max(0);
 
         let id = self.next_id;
         self.next_id += 1;
@@ -129,6 +331,7 @@ impl Desktop {
         );
         self.windows.push(window);
         self.focused = Some(id);
+        self.damage.mark_full();
         Some(id)
     }
 
@@ -138,9 +341,12 @@ impl Desktop {
 
     fn raise(&mut self, id: u64) {
         if let Some(index) = self.index_of(id) {
-            let window = self.windows.remove(index);
-            self.windows.push(window);
+            if index != self.windows.len() - 1 {
+                let window = self.windows.remove(index);
+                self.windows.push(window);
+            }
             self.focused = Some(id);
+            self.damage.mark_full();
         }
     }
 
@@ -149,11 +355,159 @@ impl Desktop {
             self.windows.remove(index);
         }
         if self.focused == Some(id) {
-            self.focused = self.windows.last().map(|window| window.id);
+            self.focused = self
+                .windows
+                .iter()
+                .rev()
+                .find(|window| !window.minimised)
+                .map(|window| window.id);
+        }
+        self.damage.mark_full();
+    }
+
+    fn minimise(&mut self, id: u64) {
+        if let Some(index) = self.index_of(id) {
+            self.windows[index].minimised = true;
+        }
+        if self.focused == Some(id) {
+            self.focused = self
+                .windows
+                .iter()
+                .rev()
+                .find(|window| !window.minimised)
+                .map(|window| window.id);
+        }
+        self.damage.mark_full();
+    }
+
+    fn place(&mut self, id: u64, rect: Rect, remember: bool) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        if remember && self.windows[index].restore.is_none() {
+            self.windows[index].restore = Some(self.windows[index].frame);
+        }
+        self.windows[index].frame = rect;
+        self.windows[index].sync_content_size();
+        self.damage.mark_full();
+    }
+
+    fn toggle_maximise(&mut self, id: u64) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        match self.windows[index].restore.take() {
+            Some(previous) => {
+                self.windows[index].frame = previous;
+                self.windows[index].sync_content_size();
+            }
+            None => {
+                let work = self.work_area();
+                self.place(id, work, true);
+            }
+        }
+        self.damage.mark_full();
+    }
+
+    fn set_fullscreen(&mut self, id: u64, on: bool) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        if self.windows[index].fullscreen == on {
+            return;
+        }
+        if on {
+            if self.windows[index].restore.is_none() {
+                self.windows[index].restore = Some(self.windows[index].frame);
+            }
+            self.windows[index].fullscreen = true;
+            self.windows[index].frame = self.screen();
+        } else {
+            self.windows[index].fullscreen = false;
+            if let Some(previous) = self.windows[index].restore.take() {
+                self.windows[index].frame = previous;
+            }
+        }
+        self.windows[index].sync_content_size();
+        self.raise(id);
+        self.damage.mark_full();
+    }
+
+    fn snap_to(&mut self, id: u64, snap: Snap) {
+        let work = self.work_area();
+        let rect = match snap {
+            Snap::None => return,
+            Snap::Maximise => work,
+            Snap::Left => Rect::new(work.x, work.y, work.w / 2, work.h),
+            Snap::Right => Rect::new(work.x + work.w / 2, work.y, work.w - work.w / 2, work.h),
+        };
+        self.place(id, rect, true);
+    }
+
+    fn tile_all(&mut self) {
+        let visible: Vec<u64> = self
+            .windows
+            .iter()
+            .filter(|window| !window.minimised)
+            .map(|window| window.id)
+            .collect();
+        if visible.is_empty() {
+            return;
+        }
+        let work = self.work_area();
+        // Squarish grid: as many columns as rows, give or take.
+        let columns = {
+            let mut c = 1;
+            while c * c < visible.len() {
+                c += 1;
+            }
+            c
+        };
+        let rows = visible.len().div_ceil(columns);
+        for (index, id) in visible.iter().enumerate() {
+            let column = (index % columns) as i32;
+            let row = (index / columns) as i32;
+            let cell_w = work.w / columns as i32;
+            let cell_h = work.h / rows as i32;
+            let rect = Rect::new(
+                work.x + column * cell_w,
+                work.y + row * cell_h,
+                cell_w - 2,
+                cell_h - 2,
+            );
+            if let Some(window_index) = self.index_of(*id) {
+                self.windows[window_index].restore = None;
+            }
+            self.place(*id, rect, false);
         }
     }
 
-    fn focus_next(&mut self) {
+    fn cascade_all(&mut self) {
+        let visible: Vec<u64> = self
+            .windows
+            .iter()
+            .filter(|window| !window.minimised)
+            .map(|window| window.id)
+            .collect();
+        let work = self.work_area();
+        for (index, id) in visible.iter().enumerate() {
+            let offset = index as i32 * 26;
+            let Some(window_index) = self.index_of(*id) else {
+                continue;
+            };
+            let frame = self.windows[window_index].frame;
+            let width = frame.w.min(work.w - offset - 20).max(200);
+            let height = frame.h.min(work.h - offset - 20).max(140);
+            self.windows[window_index].restore = None;
+            self.place(
+                *id,
+                Rect::new(20 + offset, 20 + offset, width, height),
+                false,
+            );
+        }
+    }
+
+    fn focus_next(&mut self, backwards: bool) {
         let visible: Vec<u64> = self
             .windows
             .iter()
@@ -166,7 +520,13 @@ impl Desktop {
         let current = self.focused.unwrap_or(0);
         let position = visible.iter().position(|&id| id == current);
         let next = match position {
-            Some(index) => visible[(index + 1) % visible.len()],
+            Some(index) => {
+                if backwards {
+                    visible[(index + visible.len() - 1) % visible.len()]
+                } else {
+                    visible[(index + 1) % visible.len()]
+                }
+            }
             None => visible[0],
         };
         self.raise(next);
@@ -179,6 +539,24 @@ impl Desktop {
             .rev()
             .find(|window| !window.minimised && window.frame.contains(x, y))
             .map(|window| window.id)
+    }
+
+    /// Topmost window whose resize band contains the point.
+    fn resize_target(&self, x: i32, y: i32) -> Option<(u64, Edges)> {
+        for window in self.windows.iter().rev() {
+            if window.minimised || window.fullscreen || window.is_maximised() {
+                continue;
+            }
+            let edges = theme::resize_edges(window.frame, x, y);
+            if edges.any() {
+                return Some((window.id, edges));
+            }
+            // A window body under the pointer blocks anything beneath it.
+            if window.frame.contains(x, y) {
+                return None;
+            }
+        }
+        None
     }
 
     // --- event handling ---
@@ -196,20 +574,81 @@ impl Desktop {
         if !event.pressed {
             return;
         }
+        self.damage.mark_full();
 
-        // Desktop-level bindings first.
-        if event.modifiers.alt && event.key == Key::Tab {
-            self.focus_next();
+        // A fullscreen window gets everything except the escape hatch.
+        let fullscreen_id = self
+            .windows
+            .iter()
+            .find(|window| window.fullscreen)
+            .map(|window| window.id);
+        if let Some(id) = fullscreen_id {
+            if event.key == Key::F11 || (event.key == Key::Escape && event.modifiers.shift) {
+                self.set_fullscreen(id, false);
+                return;
+            }
+            self.deliver_key(id, event);
             return;
         }
-        if event.modifiers.ctrl && event.key == Key::Char {
-            if let Some('w') = event.character {
-                if let Some(id) = self.focused {
-                    self.close(id);
+
+        if self.menu.is_some() && event.key == Key::Escape {
+            self.menu = None;
+            return;
+        }
+
+        if event.modifiers.alt && event.key == Key::Tab {
+            self.focus_next(event.modifiers.shift);
+            return;
+        }
+
+        if let Some(id) = self.focused {
+            if event.modifiers.ctrl {
+                if let Some(character) = event.character {
+                    match character {
+                        'w' => {
+                            self.close(id);
+                            return;
+                        }
+                        'm' => {
+                            self.minimise(id);
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
+            }
+            // Window placement on the arrow keys, the way every desktop does it.
+            if event.modifiers.alt {
+                match event.key {
+                    Key::Up => {
+                        self.snap_to(id, Snap::Maximise);
+                        return;
+                    }
+                    Key::Left => {
+                        self.snap_to(id, Snap::Left);
+                        return;
+                    }
+                    Key::Right => {
+                        self.snap_to(id, Snap::Right);
+                        return;
+                    }
+                    Key::Down => {
+                        if self.index_of(id).map(|i| self.windows[i].is_maximised()) == Some(true) {
+                            self.toggle_maximise(id);
+                        } else {
+                            self.minimise(id);
+                        }
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            if event.key == Key::F11 {
+                self.set_fullscreen(id, true);
                 return;
             }
         }
+
         let launch_index = match event.key {
             Key::F1 => Some(0),
             Key::F2 => Some(1),
@@ -219,70 +658,86 @@ impl Desktop {
             Key::F6 => Some(5),
             Key::F7 => Some(6),
             Key::F8 => Some(7),
+            Key::F9 => Some(8),
+            Key::F10 => Some(9),
             _ => None,
         };
         if let Some(index) = launch_index {
             if let Some(entry) = self.registry.get(index) {
                 let name = entry.name;
+                self.menu = None;
                 self.open(name);
             }
             return;
         }
-        if event.key == Key::Escape && self.menu_open {
-            self.menu_open = false;
-            return;
-        }
 
         let Some(id) = self.focused else { return };
+        self.deliver_key(id, event);
+    }
+
+    fn deliver_key(&mut self, id: u64, event: &KeyEvent) {
         let Some(index) = self.index_of(id) else {
             return;
         };
         let mut response = AppResponse::default();
         self.windows[index].app.on_key(event, &mut response);
-        self.windows[index].needs_paint = true;
         self.apply(id, response);
     }
 
     fn on_mouse(&mut self, event: input::MouseEvent) {
+        let previous = (self.cursor_x, self.cursor_y);
         self.cursor_x = (self.cursor_x + event.dx).clamp(0, self.width - 1);
         self.cursor_y = (self.cursor_y + event.dy).clamp(0, self.height - 1);
+        if (self.cursor_x, self.cursor_y) != previous {
+            // Only the pointer moved: damage where it was and where it is.
+            self.damage.add(cursor::bounds(previous.0, previous.1));
+            self.damage
+                .add(cursor::bounds(self.cursor_x, self.cursor_y));
+        }
         let (x, y) = (self.cursor_x, self.cursor_y);
+
+        if event.right_changed {
+            self.right_down = event.right;
+            if event.right {
+                self.on_right_press(x, y);
+            }
+            return;
+        }
 
         if event.left_changed {
             self.left_down = event.left;
             if event.left {
                 self.on_press(x, y);
             } else {
-                self.drag = Drag::None;
-                self.forward_mouse(x, y, false, true, false);
+                self.on_release(x, y);
             }
             return;
         }
 
-        // Dragging takes priority over anything under the pointer.
+        // A drag in progress owns the pointer.
         match self.drag {
             Drag::Move { id, dx, dy } => {
-                if let Some(index) = self.index_of(id) {
-                    let frame = self.windows[index].frame;
-                    let new_x = (x - dx).clamp(-frame.w + 60, self.width - 60);
-                    let new_y = (y - dy).clamp(0, self.height - theme::TASKBAR_HEIGHT - 8);
-                    self.windows[index].frame = Rect::new(new_x, new_y, frame.w, frame.h);
-                }
+                self.drag_move(id, x, y, dx, dy);
                 return;
             }
-            Drag::Resize { id, dx, dy } => {
-                if let Some(index) = self.index_of(id) {
-                    let frame = self.windows[index].frame;
-                    let (min_w, min_h) = self.windows[index].app.min_size();
-                    let width = (x - frame.x + dx).clamp(min_w, self.width - frame.x);
-                    let height = (y - frame.y + dy)
-                        .clamp(min_h, self.height - frame.y - theme::TASKBAR_HEIGHT);
-                    self.windows[index].frame = Rect::new(frame.x, frame.y, width, height);
-                    self.windows[index].sync_content_size();
-                }
+            Drag::Resize {
+                id,
+                edges,
+                origin,
+                grab_x,
+                grab_y,
+            } => {
+                self.drag_resize(id, edges, origin, x - grab_x, y - grab_y);
                 return;
             }
             Drag::None => {}
+        }
+
+        if let Some(menu) = &mut self.menu {
+            if menu.hover(x, y) {
+                self.damage.mark_full();
+            }
+            return;
         }
 
         if event.dx != 0 || event.dy != 0 {
@@ -290,28 +745,138 @@ impl Desktop {
         }
     }
 
+    fn drag_move(&mut self, id: u64, x: i32, y: i32, dx: i32, dy: i32) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        // Dragging a maximised window restores it under the pointer.
+        if self.windows[index].is_maximised() {
+            if let Some(previous) = self.windows[index].restore.take() {
+                self.windows[index].frame = Rect::new(
+                    x - previous.w / 2,
+                    y - theme::TITLE_HEIGHT / 2,
+                    previous.w,
+                    previous.h,
+                );
+                self.windows[index].sync_content_size();
+                self.drag = Drag::Move {
+                    id,
+                    dx: previous.w / 2,
+                    dy: theme::TITLE_HEIGHT / 2,
+                };
+            }
+            self.damage.mark_full();
+            return;
+        }
+
+        let frame = self.windows[index].frame;
+        let new_x = (x - dx).clamp(-frame.w + 80, self.width - 80);
+        let new_y = (y - dy).clamp(0, self.height - theme::TASKBAR_HEIGHT - 8);
+        self.windows[index].frame = Rect::new(new_x, new_y, frame.w, frame.h);
+
+        // Edge proximity previews a snap, applied on release.
+        let snap = if y <= 2 {
+            Snap::Maximise
+        } else if x <= 2 {
+            Snap::Left
+        } else if x >= self.width - 3 {
+            Snap::Right
+        } else {
+            Snap::None
+        };
+        if snap != self.snap {
+            self.snap = snap;
+        }
+        self.damage.mark_full();
+    }
+
+    fn drag_resize(&mut self, id: u64, edges: Edges, origin: Rect, dx: i32, dy: i32) {
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        let (min_w, min_h) = self.windows[index].app.min_size();
+        let min_w = min_w.max(160);
+        let min_h = min_h.max(theme::TITLE_HEIGHT + 40);
+
+        let mut rect = origin;
+        if edges.left {
+            // Moving the left edge right shrinks the window; clamp so it never
+            // inverts or slides past its own right edge.
+            let shift = dx.min(origin.w - min_w);
+            rect.x = origin.x + shift;
+            rect.w = origin.w - shift;
+        }
+        if edges.right {
+            rect.w = (origin.w + dx).max(min_w);
+        }
+        if edges.top {
+            let shift = dy.min(origin.h - min_h);
+            rect.y = (origin.y + shift).max(0);
+            rect.h = origin.h - (rect.y - origin.y);
+        }
+        if edges.bottom {
+            rect.h = (origin.h + dy).max(min_h);
+        }
+
+        rect.w = rect.w.clamp(min_w, self.width * 2);
+        rect.h = rect.h.clamp(min_h, self.height * 2);
+
+        self.windows[index].frame = rect;
+        self.windows[index].sync_content_size();
+        self.damage.mark_full();
+    }
+
     fn on_press(&mut self, x: i32, y: i32) {
-        // Taskbar.
+        self.damage.mark_full();
+
+        // Menus consume the click that lands in them, and close otherwise.
+        if let Some(menu) = &self.menu {
+            let chosen = menu.item_at(x, y);
+            let inside = menu.rect.contains(x, y);
+            if let Some(index) = chosen {
+                let action = menu.items[index].action.clone();
+                self.menu = None;
+                self.run_action(action);
+                return;
+            }
+            self.menu = None;
+            if inside {
+                return;
+            }
+        }
+
+        // Double click on a title bar toggles maximise.
+        let now = pit::ticks();
+        let double = now.saturating_sub(self.last_click) < 400
+            && (x - self.last_click_pos.0).abs() < 6
+            && (y - self.last_click_pos.1).abs() < 6;
+        self.last_click = now;
+        self.last_click_pos = (x, y);
+
         if y >= self.height - theme::TASKBAR_HEIGHT {
             self.on_taskbar_press(x, y);
             return;
         }
 
-        // Launcher menu.
-        if self.menu_open {
-            if self.menu_rect.contains(x, y) {
-                let row = (y - self.menu_rect.y - 6) / 20;
-                if row >= 0 && (row as usize) < self.registry.len() {
-                    let name = self.registry[row as usize].name;
-                    self.menu_open = false;
-                    self.open(name);
-                }
-                return;
+        // Resize bands are checked before the window body, since they overlap.
+        if let Some((id, edges)) = self.resize_target(x, y) {
+            self.raise(id);
+            if let Some(index) = self.index_of(id) {
+                self.drag = Drag::Resize {
+                    id,
+                    edges,
+                    origin: self.windows[index].frame,
+                    grab_x: x,
+                    grab_y: y,
+                };
             }
-            self.menu_open = false;
+            return;
         }
 
         let Some(id) = self.window_at(x, y) else {
+            // Empty desktop: clear focus so keystrokes do not go somewhere
+            // invisible.
+            self.focused = None;
             return;
         };
         self.raise(id);
@@ -320,29 +885,28 @@ impl Desktop {
         };
         let frame = self.windows[index].frame;
 
+        if self.windows[index].fullscreen {
+            self.forward_mouse(x, y, true, false, false);
+            return;
+        }
+
         if theme::close_button(frame).contains(x, y) {
             self.close(id);
             return;
         }
-        if theme::minimise_button(frame).contains(x, y) {
-            self.windows[index].minimised = true;
-            self.focused = self
-                .windows
-                .iter()
-                .rev()
-                .find(|window| !window.minimised)
-                .map(|window| window.id);
+        if theme::maximise_button(frame).contains(x, y) {
+            self.toggle_maximise(id);
             return;
         }
-        if theme::resize_grip(frame).contains(x, y) {
-            self.drag = Drag::Resize {
-                id,
-                dx: frame.right() - x,
-                dy: frame.bottom() - y,
-            };
+        if theme::minimise_button(frame).contains(x, y) {
+            self.minimise(id);
             return;
         }
         if theme::title_bar(frame).contains(x, y) {
+            if double {
+                self.toggle_maximise(id);
+                return;
+            }
             self.drag = Drag::Move {
                 id,
                 dx: x - frame.x,
@@ -354,40 +918,49 @@ impl Desktop {
         self.forward_mouse(x, y, true, false, false);
     }
 
-    fn on_taskbar_press(&mut self, x: i32, y: i32) {
-        let _ = y;
-        if x < 96 {
-            self.menu_open = !self.menu_open;
-            let height = self.registry.len() as i32 * 20 + 12;
-            self.menu_rect = Rect::new(
-                6,
-                self.height - theme::TASKBAR_HEIGHT - height - 4,
-                200,
-                height,
-            );
+    fn on_release(&mut self, x: i32, y: i32) {
+        self.damage.mark_full();
+        if let Drag::Move { id, .. } = self.drag {
+            let snap = self.snap;
+            self.snap = Snap::None;
+            self.drag = Drag::None;
+            if snap != Snap::None {
+                self.snap_to(id, snap);
+                return;
+            }
+        }
+        self.drag = Drag::None;
+        self.snap = Snap::None;
+        self.forward_mouse(x, y, false, true, false);
+    }
+
+    fn on_right_press(&mut self, x: i32, y: i32) {
+        self.damage.mark_full();
+        self.menu = None;
+
+        if y >= self.height - theme::TASKBAR_HEIGHT {
+            self.menu = Some(Menu::new(self.taskbar_menu(), x, y, self.screen()));
             return;
         }
 
-        // Window buttons.
-        let mut button_x = 104;
-        let ids: Vec<u64> = self.windows.iter().map(|window| window.id).collect();
-        for id in ids {
-            let rect = Rect::new(button_x, self.height - theme::TASKBAR_HEIGHT + 4, 130, 20);
-            if rect.contains(x, y) {
-                if let Some(index) = self.index_of(id) {
-                    if self.windows[index].minimised {
-                        self.windows[index].minimised = false;
-                        self.raise(id);
-                    } else if self.focused == Some(id) {
-                        self.windows[index].minimised = true;
-                    } else {
-                        self.raise(id);
-                    }
-                }
+        if let Some(id) = self.window_at(x, y) {
+            let Some(index) = self.index_of(id) else {
+                return;
+            };
+            let frame = self.windows[index].frame;
+            self.raise(id);
+            if theme::title_bar(frame).contains(x, y) {
+                let items = self.window_menu(id);
+                self.menu = Some(Menu::new(items, x, y, self.screen()));
                 return;
             }
-            button_x += 134;
+            // Inside the content: let the app have it, and fall back to the
+            // window menu only if it does nothing with it.
+            self.forward_mouse(x, y, true, false, false);
+            return;
         }
+
+        self.menu = Some(Menu::new(self.desktop_menu(), x, y, self.screen()));
     }
 
     fn forward_mouse(&mut self, x: i32, y: i32, pressed: bool, released: bool, moved: bool) {
@@ -405,14 +978,14 @@ impl Desktop {
             x: x - content.x,
             y: y - content.y,
             left: self.left_down,
-            right: false,
+            right: self.right_down,
             pressed,
             released,
             moved,
+            wheel: 0,
         };
         let mut response = AppResponse::default();
         self.windows[index].app.on_mouse(&event, &mut response);
-        self.windows[index].needs_paint = true;
         self.apply(id, response);
     }
 
@@ -420,13 +993,191 @@ impl Desktop {
         if let Some(title) = response.retitle {
             if let Some(index) = self.index_of(id) {
                 self.windows[index].title = title;
+                self.damage.mark_full();
             }
         }
         if let Some(name) = response.launch {
             self.open(&name);
         }
+        if let Some(on) = response.fullscreen {
+            self.set_fullscreen(id, on);
+        }
         if response.close {
             self.close(id);
+        }
+    }
+
+    // --- menus ---
+
+    fn launcher_items(&self) -> Vec<menu::Item> {
+        self.registry
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                menu::Item::new(entry.title, Action::Launch(entry.name))
+                    .with_icon(entry.icon)
+                    .with_hint(&format!("F{}", index + 1))
+            })
+            .collect()
+    }
+
+    fn taskbar_menu(&self) -> Vec<menu::Item> {
+        let mut items = self.launcher_items();
+        items.push(menu::Item::separator());
+        items.push(menu::Item::new("Tile windows", Action::TileAll));
+        items.push(menu::Item::new("Cascade windows", Action::CascadeAll));
+        items.push(menu::Item::new("Minimise all", Action::MinimiseAll));
+        items.push(menu::Item::separator());
+        items.push(
+            menu::Item::new("Scanlines", Action::ToggleScanlines).with_hint(if self.scanlines {
+                "on"
+            } else {
+                "off"
+            }),
+        );
+        items.push(
+            menu::Item::new("Frame rate", Action::ToggleFps).with_hint(if self.show_fps {
+                "on"
+            } else {
+                "off"
+            }),
+        );
+        items.push(menu::Item::separator());
+        items.push(menu::Item::new("Restart", Action::Reboot));
+        items.push(menu::Item::new("Shut down", Action::PowerOff));
+        items
+    }
+
+    fn desktop_menu(&self) -> Vec<menu::Item> {
+        let mut items = self.launcher_items();
+        items.push(menu::Item::separator());
+        items.push(menu::Item::new("Tile windows", Action::TileAll));
+        items.push(menu::Item::new("Cascade windows", Action::CascadeAll));
+        if !self.windows.is_empty() {
+            items.push(menu::Item::new("Close all", Action::CloseAll));
+        }
+        items
+    }
+
+    fn window_menu(&self, id: u64) -> Vec<menu::Item> {
+        let maximised = self
+            .index_of(id)
+            .map(|index| self.windows[index].is_maximised())
+            .unwrap_or(false);
+        alloc::vec![
+            menu::Item::new(
+                if maximised { "Restore" } else { "Maximise" },
+                Action::ToggleMaximise(id)
+            )
+            .with_hint("alt+up"),
+            menu::Item::new("Minimise", Action::Minimise(id)).with_hint("ctrl+m"),
+            menu::Item::new("Fullscreen", Action::Fullscreen(id)).with_hint("F11"),
+            menu::Item::separator(),
+            menu::Item::new("Snap left", Action::SnapLeft(id)).with_hint("alt+left"),
+            menu::Item::new("Snap right", Action::SnapRight(id)).with_hint("alt+right"),
+            menu::Item::separator(),
+            menu::Item::new("Close", Action::Close(id)).with_hint("ctrl+w"),
+        ]
+    }
+
+    fn run_action(&mut self, action: Action) {
+        self.damage.mark_full();
+        match action {
+            Action::Launch(name) => {
+                self.open(name);
+            }
+            Action::Close(id) => self.close(id),
+            Action::CloseAll => {
+                let ids: Vec<u64> = self.windows.iter().map(|window| window.id).collect();
+                for id in ids {
+                    self.close(id);
+                }
+            }
+            Action::Minimise(id) => self.minimise(id),
+            Action::ToggleMaximise(id) => self.toggle_maximise(id),
+            Action::Fullscreen(id) => self.set_fullscreen(id, true),
+            Action::SnapLeft(id) => self.snap_to(id, Snap::Left),
+            Action::SnapRight(id) => self.snap_to(id, Snap::Right),
+            Action::Raise(id) => {
+                if let Some(index) = self.index_of(id) {
+                    self.windows[index].minimised = false;
+                }
+                self.raise(id);
+            }
+            Action::TileAll => self.tile_all(),
+            Action::CascadeAll => self.cascade_all(),
+            Action::MinimiseAll => {
+                let ids: Vec<u64> = self.windows.iter().map(|window| window.id).collect();
+                for id in ids {
+                    self.minimise(id);
+                }
+            }
+            Action::ToggleScanlines => {
+                self.scanlines = !self.scanlines;
+                self.set_status(
+                    if self.scanlines {
+                        "scanlines on"
+                    } else {
+                        "scanlines off"
+                    },
+                    2000,
+                );
+            }
+            Action::ToggleFps => self.show_fps = !self.show_fps,
+            Action::Reboot => crate::arch::acpi::reboot(),
+            Action::PowerOff => {
+                crate::power_off();
+                self.set_status("this machine ignored every shutdown route", 4000);
+            }
+            Action::None => {}
+        }
+    }
+
+    fn taskbar_button_rects(&self) -> Vec<(u64, Rect)> {
+        let mut rects = Vec::new();
+        let mut x = 104;
+        for window in self.windows.iter() {
+            if x > self.width - 260 {
+                break;
+            }
+            rects.push((
+                window.id,
+                Rect::new(x, self.height - theme::TASKBAR_HEIGHT + 4, 130, 20),
+            ));
+            x += 134;
+        }
+        rects
+    }
+
+    fn on_taskbar_press(&mut self, x: i32, y: i32) {
+        if x < 96 {
+            // Anchored to the button, not the click, and Menu::new flips it
+            // upwards because there is no room below.
+            let items = self.taskbar_menu();
+            self.menu = Some(Menu::new(
+                items,
+                6,
+                self.height - theme::TASKBAR_HEIGHT,
+                self.screen(),
+            ));
+            return;
+        }
+
+        for (id, rect) in self.taskbar_button_rects() {
+            if rect.contains(x, y) {
+                let Some(index) = self.index_of(id) else {
+                    return;
+                };
+                if self.windows[index].minimised {
+                    self.windows[index].minimised = false;
+                    self.raise(id);
+                } else if self.focused == Some(id) {
+                    self.minimise(id);
+                } else {
+                    self.raise(id);
+                }
+                return;
+            }
         }
     }
 
@@ -445,30 +1196,130 @@ impl Desktop {
         }
     }
 
+    /// Composite, unless nothing has changed since the last frame.
     pub fn compose(&mut self) {
-        self.frames += 1;
-
+        // Repaint window contents first: an app that reported itself dirty
+        // damages the area its window covers.
         let focused = self.focused;
+        let mut repaint_damage: Vec<Rect> = Vec::new();
         for window in self.windows.iter_mut() {
             if window.minimised {
                 continue;
             }
             window.sync_content_size();
-            window.repaint_if_needed(Some(window.id) == focused);
+            if window.repaint_if_needed(Some(window.id) == focused) {
+                repaint_damage.push(window.content_rect());
+            }
+        }
+        for rect in repaint_damage {
+            self.damage.add(rect);
         }
 
-        let backdrop = &self.backdrop;
+        // The taskbar clock has to tick even on an otherwise still screen.
+        let now = rtc::now();
+        if now.second != self.last_second {
+            self.last_second = now.second;
+            self.damage.add(Rect::new(
+                0,
+                self.height - theme::TASKBAR_HEIGHT,
+                self.width,
+                theme::TASKBAR_HEIGHT,
+            ));
+        }
+        if !self.status.is_empty() && pit::ticks() >= self.status_until {
+            self.status.clear();
+            self.damage.add(Rect::new(
+                0,
+                self.height - theme::TASKBAR_HEIGHT,
+                self.width,
+                theme::TASKBAR_HEIGHT,
+            ));
+        }
+
+        if self.damage.is_empty() {
+            self.clock.skipped += 1;
+            return;
+        }
+
+        self.previous_cursor = (self.cursor_x, self.cursor_y);
+        self.frames += 1;
+        self.clock.begin();
+
+        let regions: Vec<Rect> = if self.damage.full {
+            alloc::vec![self.screen()]
+        } else {
+            self.damage
+                .rects
+                .iter()
+                .map(|rect| rect.intersect(&self.screen()))
+                .filter(|rect| !rect.is_empty())
+                .collect()
+        };
+        self.damage.clear();
+
+        for region in &regions {
+            self.paint(*region);
+        }
+        for region in &regions {
+            fb::present_rect(*region);
+        }
+
+        self.clock.end();
+    }
+
+    /// Paint one region. Every step clips to `region`, so a partial redraw is
+    /// the same pipeline with a smaller scissor.
+    fn paint(&mut self, region: Rect) {
+        let focused = self.focused;
         let windows = &self.windows;
-        let (cursor_x, cursor_y, pressed) = (self.cursor_x, self.cursor_y, self.left_down);
+        let backdrop = &self.backdrop;
+        let (width, height) = (self.width, self.height);
+
+        // A window that is opaque and covers the whole region makes the
+        // backdrop, and everything below it, redundant.
+        let mut first_visible = 0usize;
+        for (index, window) in windows.iter().enumerate() {
+            if window.minimised || !window.app.opaque() {
+                continue;
+            }
+            let covered = window.content_rect();
+            if covered.x <= region.x
+                && covered.y <= region.y
+                && covered.right() >= region.right()
+                && covered.bottom() >= region.bottom()
+            {
+                first_visible = index;
+            }
+        }
+        let skip_backdrop = first_visible > 0;
 
         fb::with_back(|screen| {
-            screen.reset_clip();
-            screen.blit(backdrop, 0, 0);
+            screen.set_clip(region);
+            if !skip_backdrop {
+                screen.blit(backdrop, 0, 0);
+            }
 
-            for window in windows.iter() {
+            for window in windows.iter().skip(first_visible) {
                 if window.minimised {
                     continue;
                 }
+                // Cheap rejection: nothing to do for a window outside the region.
+                if window
+                    .frame
+                    .inset(-theme::SHADOW)
+                    .intersect(&region)
+                    .is_empty()
+                {
+                    continue;
+                }
+                let content = window.content_rect();
+                if window.fullscreen {
+                    screen.set_clip(content.intersect(&region));
+                    screen.blit(&window.content, content.x, content.y);
+                    screen.set_clip(region);
+                    continue;
+                }
+
                 theme::draw_shadow(screen, window.frame);
                 theme::draw_frame(
                     screen,
@@ -476,50 +1327,110 @@ impl Desktop {
                     &window.title,
                     Some(window.id) == focused,
                     window.icon,
+                    window.is_maximised(),
                 );
-                let content = theme::content_for(window.frame);
-                let previous = screen.set_clip(content);
+                screen.set_clip(content.intersect(&region));
                 screen.blit(&window.content, content.x, content.y);
-                screen.set_clip(previous);
+                screen.set_clip(region);
 
-                // Resize grip: three diagonal ticks in the corner.
-                let grip = theme::resize_grip(window.frame);
-                for step in 0..3 {
-                    let offset = step * 4;
-                    screen.line(
-                        grip.right() - 2 - offset,
-                        grip.bottom() - 2,
-                        grip.right() - 2,
-                        grip.bottom() - 2 - offset,
-                        palette::BORDER_BRIGHT,
-                    );
+                if !window.is_maximised() {
+                    let grip = theme::resize_grip(window.frame);
+                    for step in 0..3 {
+                        let offset = step * 4;
+                        screen.line(
+                            grip.right() - 2 - offset,
+                            grip.bottom() - 2,
+                            grip.right() - 2,
+                            grip.bottom() - 2 - offset,
+                            palette::BORDER_BRIGHT,
+                        );
+                    }
                 }
             }
-
-            cursor::draw(screen, cursor_x, cursor_y, pressed);
         });
 
-        self.draw_taskbar();
-        self.draw_menu();
+        // Snap preview, taskbar, menu, then the pointer -- which must be last
+        // so it is never hidden by the chrome it is pointing at.
+        self.draw_snap_preview(region);
+        let taskbar = Rect::new(
+            0,
+            height - theme::TASKBAR_HEIGHT,
+            width,
+            theme::TASKBAR_HEIGHT,
+        );
+        if !self.windows.iter().any(|window| window.fullscreen)
+            && !taskbar.intersect(&region).is_empty()
+        {
+            self.draw_taskbar(region);
+        }
+        if let Some(menu) = &self.menu {
+            if !menu
+                .rect
+                .inset(-theme::SHADOW)
+                .intersect(&region)
+                .is_empty()
+            {
+                let menu_ref = menu;
+                fb::with_back(|screen| {
+                    screen.set_clip(region);
+                    menu_ref.draw(screen);
+                });
+            }
+        }
 
+        let (cursor_x, cursor_y, pressed) = (self.cursor_x, self.cursor_y, self.left_down);
+        let scanlines = self.scanlines;
         fb::with_back(|screen| {
+            screen.set_clip(region);
+            cursor::draw(screen, cursor_x, cursor_y, pressed);
             screen.reset_clip();
-            crt::apply_scanlines(screen);
+            if scanlines {
+                crt::apply_scanlines_rect(screen, region);
+            }
         });
-        fb::present();
     }
 
-    fn draw_taskbar(&mut self) {
+    fn draw_snap_preview(&self, region: Rect) {
+        if self.snap == Snap::None {
+            return;
+        }
+        let work = self.work_area();
+        let rect = match self.snap {
+            Snap::Maximise => work,
+            Snap::Left => Rect::new(work.x, work.y, work.w / 2, work.h),
+            Snap::Right => Rect::new(work.x + work.w / 2, work.y, work.w - work.w / 2, work.h),
+            Snap::None => return,
+        };
+        fb::with_back(|screen| {
+            screen.set_clip(region);
+            screen.fill_rect_blend(rect, palette::AMBER, 42);
+            screen.stroke_rect(rect, palette::AMBER);
+            screen.stroke_rect(rect.inset(1), palette::AMBER_DIM);
+        });
+    }
+
+    fn draw_taskbar(&mut self, region: Rect) {
         let height = self.height;
         let width = self.width;
         let focused = self.focused;
         let windows = &self.windows;
-        let frames = self.frames;
+        let buttons = self.taskbar_button_rects();
         let status = if pit::ticks() < self.status_until {
             Some(self.status.clone())
         } else {
             None
         };
+        let fps = if self.show_fps {
+            Some(format!(
+                "{} fps  {} ms  {} skipped",
+                self.clock.frames_per_second(),
+                self.clock.millis(),
+                self.clock.skipped
+            ))
+        } else {
+            None
+        };
+        let menu_open = self.menu.is_some();
 
         fb::with_back(|screen| {
             let bar = Rect::new(
@@ -528,7 +1439,7 @@ impl Desktop {
                 width,
                 theme::TASKBAR_HEIGHT,
             );
-            screen.reset_clip();
+            screen.set_clip(bar.intersect(&region));
             screen.gradient_v(
                 bar,
                 palette::rgb(0x16, 0x1D, 0x30),
@@ -537,6 +1448,12 @@ impl Desktop {
             screen.hline(0, bar.y, width, palette::AMBER_DIM);
 
             // Launcher button.
+            if menu_open {
+                screen.fill_rect(
+                    Rect::new(2, bar.y + 3, 92, theme::TASKBAR_HEIGHT - 6),
+                    palette::rgb(0x25, 0x2E, 0x4A),
+                );
+            }
             screen.glyph(
                 glyph::LOGO,
                 10,
@@ -548,13 +1465,13 @@ impl Desktop {
             screen.text_ex("HALCYON", 26, bar.y + 6, palette::AMBER, Weight::Bold, 1);
             screen.vline(96, bar.y + 4, theme::TASKBAR_HEIGHT - 8, palette::BORDER);
 
-            // One button per window.
-            let mut x = 104;
-            for window in windows.iter() {
-                let rect = Rect::new(x, bar.y + 4, 130, 20);
-                let active = Some(window.id) == focused && !window.minimised;
+            for (id, rect) in &buttons {
+                let Some(window) = windows.iter().find(|window| window.id == *id) else {
+                    continue;
+                };
+                let active = Some(*id) == focused && !window.minimised;
                 screen.fill_rect(
-                    rect,
+                    *rect,
                     if active {
                         palette::rgb(0x25, 0x2E, 0x4A)
                     } else {
@@ -562,7 +1479,7 @@ impl Desktop {
                     },
                 );
                 screen.stroke_rect(
-                    rect,
+                    *rect,
                     if active {
                         palette::AMBER_DIM
                     } else {
@@ -584,24 +1501,40 @@ impl Desktop {
                     Weight::Regular,
                     1,
                 );
-                let previous = screen.set_clip(Rect::new(rect.x + 18, rect.y, rect.w - 22, rect.h));
+                let previous = screen.set_clip(
+                    Rect::new(rect.x + 18, rect.y, rect.w - 22, rect.h).intersect(&region),
+                );
                 screen.text(&window.title, rect.x + 18, rect.y + 2, color);
                 screen.set_clip(previous);
-                x += 134;
-                if x > width - 260 {
-                    break;
-                }
             }
 
-            // Status message, then the clock.
-            if let Some(text) = status {
-                screen.text(&text, x + 8, bar.y + 6, palette::CYAN_DIM);
+            let right_edge = width - 8 * 8 - 12;
+            let text_left = buttons.last().map(|(_, r)| r.right() + 10).unwrap_or(104);
+            if let Some(text) = fps {
+                let text_width = text.chars().count() as i32 * theme::CELL_W;
+                screen.text(
+                    &text,
+                    right_edge - text_width - 16,
+                    bar.y + 6,
+                    palette::CYAN_DIM,
+                );
+            } else if let Some(text) = status {
+                let previous = screen.set_clip(
+                    Rect::new(
+                        text_left,
+                        bar.y,
+                        right_edge - text_left - 8,
+                        theme::TASKBAR_HEIGHT,
+                    )
+                    .intersect(&region),
+                );
+                screen.text(&text, text_left, bar.y + 6, palette::CYAN_DIM);
+                screen.set_clip(previous);
             }
 
             let now = rtc::now();
-            let mut clock = [0u8; 8];
-            if now.is_valid() {
-                clock = [
+            let clock = if now.is_valid() {
+                [
                     b'0' + now.hour / 10,
                     b'0' + now.hour % 10,
                     b':',
@@ -610,70 +1543,35 @@ impl Desktop {
                     b':',
                     b'0' + now.second / 10,
                     b'0' + now.second % 10,
-                ];
-            }
+                ]
+            } else {
+                *b"--:--:--"
+            };
             let clock_text = core::str::from_utf8(&clock).unwrap_or("--:--:--");
             screen.text_ex(
                 clock_text,
-                width - 8 * 8 - 12,
+                right_edge,
                 bar.y + 6,
                 palette::AMBER,
                 Weight::Bold,
                 1,
             );
-
-            // A quiet frame counter: proof the compositor is actually running.
-            let mut digits = [0u8; 12];
-            let mut count = 0;
-            let mut value = frames;
-            if value == 0 {
-                digits[0] = b'0';
-                count = 1;
-            }
-            while value > 0 && count < 12 {
-                digits[count] = b'0' + (value % 10) as u8;
-                value /= 10;
-                count += 1;
-            }
-            digits[..count].reverse();
-            if let Ok(text) = core::str::from_utf8(&digits[..count]) {
-                screen.text(
-                    text,
-                    width - 8 * 8 - 12 - 60,
-                    bar.y + 6,
-                    palette::TEXT_FAINT,
-                );
-            }
-        });
-    }
-
-    fn draw_menu(&mut self) {
-        if !self.menu_open {
-            return;
-        }
-        let rect = self.menu_rect;
-        let registry = &self.registry;
-        fb::with_back(|screen| {
-            screen.reset_clip();
-            theme::draw_shadow(screen, rect);
-            screen.panel(rect, palette::PANEL_RAISED, palette::AMBER_DIM);
-            let mut y = rect.y + 6;
-            for entry in registry.iter() {
-                screen.glyph(
-                    entry.icon,
-                    rect.x + 8,
-                    y + 2,
-                    palette::CYAN,
-                    Weight::Regular,
-                    1,
-                );
-                screen.text(entry.title, rect.x + 26, y + 2, palette::TEXT);
-                y += 20;
-            }
         });
     }
 
     pub fn window_count(&self) -> usize {
         self.windows.len()
+    }
+
+    pub fn frames_per_second(&self) -> u64 {
+        self.clock.frames_per_second()
+    }
+
+    pub fn frame_millis(&self) -> u64 {
+        self.clock.millis()
+    }
+
+    pub fn skipped_frames(&self) -> u64 {
+        self.clock.skipped
     }
 }

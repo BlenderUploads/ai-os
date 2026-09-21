@@ -1,0 +1,68 @@
+# Exercise the window manager: pointer layering, menus, maximise, snapping,
+# edge resizing and fullscreen.
+
+wait 1.5
+
+# The original complaint: the pointer must draw over the taskbar, not under it.
+moveto 300 754
+wait 0.8
+shot cursor-over-taskbar
+
+# Right-click on empty desktop -> context menu.
+mon mouse_button 2
+wait 0.2
+mon mouse_button 0
+wait 0.3
+moveto 600 500
+wait 0.3
+mon mouse_button 2
+wait 0.4
+mon mouse_button 0
+wait 0.8
+shot desktop-menu
+
+keys esc
+wait 0.5
+
+# Right-click a title bar -> window menu.
+moveto 300 76
+wait 0.3
+mon mouse_button 2
+wait 0.4
+mon mouse_button 0
+wait 0.8
+shot window-menu
+
+keys esc
+wait 0.5
+
+# Maximise the focused window with alt+up, then restore with alt+down.
+keys alt-up
+wait 1.0
+shot maximised
+keys alt-down
+wait 1.0
+
+# Snap left and right.
+keys alt-left
+wait 1.0
+shot snap-left
+
+# Drag the bottom-right corner to resize.
+keys alt-down
+wait 0.8
+drag 744 492 900 700
+wait 0.8
+shot resized
+
+# Fullscreen, then back out of it.
+keys f11
+wait 1.2
+shot fullscreen
+keys f11
+wait 1.0
+
+# Taskbar launcher menu.
+click 40 753
+wait 1.0
+shot launcher

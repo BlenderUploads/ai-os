@@ -58,6 +58,19 @@ impl Framebuffer {
         self.frames_presented += 1;
 
         if self.fast_path {
+            // When the scanline pitch is exactly the visible width there is no
+            // padding between rows, so the whole framebuffer is one contiguous
+            // run and a single copy beats 768 separate ones.
+            if self.pitch == self.width * 4 {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        self.back.pixels.as_ptr(),
+                        self.hardware as *mut u32,
+                        self.width * self.height,
+                    );
+                }
+                return;
+            }
             for y in 0..self.height {
                 unsafe {
                     let dst = self.hardware.add(y * self.pitch) as *mut u32;
@@ -74,6 +87,63 @@ impl Framebuffer {
                 let encoded = self.encode(color);
                 unsafe {
                     let dst = self.hardware.add(y * self.pitch + x * self.bytes_per_pixel);
+                    match self.bytes_per_pixel {
+                        4 => (dst as *mut u32).write_volatile(encoded),
+                        3 => {
+                            dst.write_volatile(encoded as u8);
+                            dst.add(1).write_volatile((encoded >> 8) as u8);
+                            dst.add(2).write_volatile((encoded >> 16) as u8);
+                        }
+                        2 => (dst as *mut u16).write_volatile(encoded as u16),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// Push one rectangle of the back buffer to the screen.
+    pub fn present_rect(&mut self, rect: super::draw::Rect) {
+        if self.hardware.is_null() {
+            return;
+        }
+        let area = rect.intersect(&super::draw::Rect::new(
+            0,
+            0,
+            self.width as i32,
+            self.height as i32,
+        ));
+        if area.is_empty() {
+            return;
+        }
+        self.frames_presented += 1;
+
+        if self.fast_path {
+            for y in area.y..area.bottom() {
+                unsafe {
+                    let dst = self
+                        .hardware
+                        .add(y as usize * self.pitch + area.x as usize * 4)
+                        as *mut u32;
+                    let src = self
+                        .back
+                        .pixels
+                        .as_ptr()
+                        .add(y as usize * self.width + area.x as usize);
+                    core::ptr::copy_nonoverlapping(src, dst, area.w as usize);
+                }
+            }
+            return;
+        }
+
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                let color = self.back.pixels[y as usize * self.width + x as usize];
+                let encoded = self.encode(color);
+                unsafe {
+                    let dst = self
+                        .hardware
+                        .add(y as usize * self.pitch + x as usize * self.bytes_per_pixel);
                     match self.bytes_per_pixel {
                         4 => (dst as *mut u32).write_volatile(encoded),
                         3 => {
@@ -183,4 +253,10 @@ pub fn with_back<F: FnOnce(&mut Surface)>(f: F) {
 
 pub fn present() {
     FRAMEBUFFER.lock().present();
+}
+
+/// Push only part of the back buffer. Used by the compositor's damage
+/// tracking, which is what makes moving the pointer nearly free.
+pub fn present_rect(rect: super::draw::Rect) {
+    FRAMEBUFFER.lock().present_rect(rect);
 }

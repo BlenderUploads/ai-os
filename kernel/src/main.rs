@@ -267,15 +267,20 @@ fn run_desktop(info: &boot::BootInfo) -> ! {
         if uptime - last_report >= 2000 {
             last_report = uptime;
             serial_println!(
-                "[ui  ] frame {} at {} ms ({} windows)",
+                "[ui  ] frame {} at {} ms ({} windows, {} fps, {} ms/frame, {} skipped)",
                 desktop.frames,
                 uptime,
-                desktop.window_count()
+                desktop.window_count(),
+                desktop.frames_per_second(),
+                desktop.frame_millis(),
+                desktop.skipped_frames()
             );
         }
 
-        // Aim for roughly 30 frames a second and leave the CPU to other threads.
-        task::sleep_ms(33);
+        // Aim for roughly 60 frames a second. Composition is skipped when
+        // nothing changed, so a still desktop costs almost nothing and the
+        // CPU goes to the idle thread instead.
+        task::sleep_ms(16);
     }
 }
 

@@ -17,13 +17,31 @@ use super::palette::{self, Color};
 /// shift, a mask and a subtract, and darkens by a flat 25%. The mask keeps
 /// each channel's borrow from bleeding into the one below it.
 pub fn apply_scanlines(surface: &mut Surface) {
+    let bounds = surface.bounds();
+    apply_scanlines_rect(surface, bounds);
+}
+
+/// Scanlines over one region, for partial redraws.
+///
+/// The darkened rows are chosen by absolute y, not by position within the
+/// rectangle, so a region redrawn on its own lines up with everything around
+/// it instead of shifting the stripe pattern.
+pub fn apply_scanlines_rect(surface: &mut Surface, rect: Rect) {
+    let area = rect.intersect(&surface.bounds());
+    if area.is_empty() {
+        return;
+    }
     let width = surface.width;
-    for y in (1..surface.height).step_by(2) {
-        let row = &mut surface.pixels[y * width..(y + 1) * width];
+    let first = if area.y % 2 == 0 { area.y + 1 } else { area.y };
+    let mut y = first;
+    while y < area.bottom() {
+        let start = y as usize * width + area.x as usize;
+        let row = &mut surface.pixels[start..start + area.w as usize];
         for pixel in row.iter_mut() {
             let value = *pixel;
             *pixel = value - ((value >> 2) & 0x003F_3F3F);
         }
+        y += 2;
     }
 }
 

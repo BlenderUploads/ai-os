@@ -16,6 +16,8 @@ pub struct WindowMouse {
     pub pressed: bool,
     pub released: bool,
     pub moved: bool,
+    /// Vertical wheel movement, positive is away from the user.
+    pub wheel: i32,
 }
 
 /// What an application can ask the desktop to do for it.
@@ -25,13 +27,10 @@ pub struct AppResponse {
     pub retitle: Option<String>,
     /// Launch another app by its registry name.
     pub launch: Option<String>,
+    /// Ask to fill the screen with no chrome (a game, say).
+    pub fullscreen: Option<bool>,
 }
 
-/// Implemented by everything that lives in a window.
-///
-/// Deliberately not `Send`: the desktop and every app it owns run on one
-/// thread, and requiring `Send` would rule out ORACLE's `Rc`-based
-/// environments for no benefit.
 pub trait App {
     fn draw(&mut self, surface: &mut Surface, focused: bool);
 
@@ -43,7 +42,8 @@ pub trait App {
     fn tick(&mut self, _now_ms: u64, _response: &mut AppResponse) {}
 
     /// Does the content need repainting? Returning false lets the compositor
-    /// reuse the existing content surface.
+    /// reuse the existing content surface — which is most of why an idle
+    /// desktop is cheap, so be honest about it.
     fn dirty(&self) -> bool {
         true
     }
@@ -52,6 +52,12 @@ pub trait App {
 
     fn min_size(&self) -> (i32, i32) {
         (240, 140)
+    }
+
+    /// True if the app paints every pixel of its surface each frame. The
+    /// compositor can then skip anything underneath it.
+    fn opaque(&self) -> bool {
+        true
     }
 }
 
@@ -62,6 +68,9 @@ pub struct Window {
     /// Frame rectangle in screen coordinates (includes the title bar).
     pub frame: Rect,
     pub minimised: bool,
+    /// Where to put the window back when un-maximised.
+    pub restore: Option<Rect>,
+    pub fullscreen: bool,
     pub content: Surface,
     pub app: Box<dyn App>,
     pub needs_paint: bool,
@@ -76,14 +85,26 @@ impl Window {
             icon,
             frame,
             minimised: false,
+            restore: None,
+            fullscreen: false,
             content: Surface::new(content.w.max(1) as usize, content.h.max(1) as usize),
             app,
             needs_paint: true,
         }
     }
 
+    /// Where this window's content lives on screen. A fullscreen window has no
+    /// chrome, so its content is the whole frame.
     pub fn content_rect(&self) -> Rect {
-        super::theme::content_for(self.frame)
+        if self.fullscreen {
+            self.frame
+        } else {
+            super::theme::content_for(self.frame)
+        }
+    }
+
+    pub fn is_maximised(&self) -> bool {
+        self.restore.is_some()
     }
 
     /// Keep the content surface in step with the frame after a resize.
@@ -96,12 +117,14 @@ impl Window {
         }
     }
 
-    pub fn repaint_if_needed(&mut self, focused: bool) {
+    pub fn repaint_if_needed(&mut self, focused: bool) -> bool {
         if self.needs_paint || self.app.dirty() {
             self.content.reset_clip();
             self.app.draw(&mut self.content, focused);
             self.app.clear_dirty();
             self.needs_paint = false;
+            return true;
         }
+        false
     }
 }
