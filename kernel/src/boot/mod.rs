@@ -67,6 +67,20 @@ pub struct FramebufferInfo {
 pub struct Module {
     pub start: u64,
     pub end: u64,
+    /// The string GRUB's `module2` line gave it, which is how the kernel tells
+    /// the initrd from, say, a DOOM IWAD.
+    pub name: [u8; 32],
+    pub name_len: usize,
+}
+
+impl Module {
+    pub fn name(&self) -> &str {
+        core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("")
+    }
+
+    pub fn len(&self) -> u64 {
+        self.end.saturating_sub(self.start)
+    }
 }
 
 pub const MAX_REGIONS: usize = 64;
@@ -96,7 +110,12 @@ impl BootInfo {
             length: 0,
             kind: MemoryKind::Reserved,
         };
-        const EMPTY_MODULE: Module = Module { start: 0, end: 0 };
+        const EMPTY_MODULE: Module = Module {
+            start: 0,
+            end: 0,
+            name: [0; 32],
+            name_len: 0,
+        };
         Self {
             regions: [EMPTY_REGION; MAX_REGIONS],
             region_count: 0,
@@ -184,9 +203,13 @@ pub unsafe fn parse(mbi_phys: u64) -> BootInfo {
                 if info.module_count < MAX_MODULES {
                     let start = read::<u32>(cursor + 8) as u64;
                     let module_end = read::<u32>(cursor + 12) as u64;
+                    let mut name = [0u8; 32];
+                    let name_len = copy_cstr(cursor + 16, &mut name);
                     info.modules[info.module_count] = Module {
                         start,
                         end: module_end,
+                        name,
+                        name_len,
                     };
                     info.module_count += 1;
                     if module_end > info.reclaim_after {

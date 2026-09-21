@@ -481,7 +481,7 @@ pub fn install(interpreter: &mut Interpreter) {
         let filesystem = fs::FS.lock();
         match filesystem.read(path) {
             Some(file) => Ok(Value::string(
-                core::str::from_utf8(&file.data).unwrap_or("<binary>"),
+                core::str::from_utf8(file.bytes()).unwrap_or("<binary>"),
             )),
             None => Err(format!("no such file: {}", path)),
         }

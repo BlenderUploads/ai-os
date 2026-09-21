@@ -30,6 +30,24 @@ pub enum State {
     Finished,
 }
 
+/// FXSAVE image: 512 bytes, 16-byte aligned.
+#[repr(C, align(16))]
+pub struct FpuState([u8; 512]);
+
+impl FpuState {
+    /// A valid idle image. Zeroing the whole thing would leave MXCSR at 0,
+    /// which unmasks every SIMD exception -- the first ordinary float
+    /// operation would then trap.
+    fn new() -> Box<FpuState> {
+        let mut state = Box::new(FpuState([0u8; 512]));
+        // x87 control word: round to nearest, all exceptions masked.
+        state.0[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
+        // MXCSR at offset 24, likewise with everything masked.
+        state.0[24..28].copy_from_slice(&0x0000_1F80u32.to_le_bytes());
+        state
+    }
+}
+
 pub struct Thread {
     pub id: u64,
     pub name: String,
@@ -38,6 +56,12 @@ pub struct Thread {
     frame: *mut TrapFrame,
     /// Kept alive so the stack is not freed under a running thread.
     _stack: Option<Box<[u8]>>,
+    /// x87 and SSE registers, saved across switches.
+    ///
+    /// The kernel itself is built soft-float and never touches these, but the
+    /// DOOM port is compiled with SSE, so a thread's vector state has to
+    /// survive being pre-empted by another that also uses it.
+    fpu: Box<FpuState>,
     pub ticks_used: u64,
     pub switches: u64,
 }
@@ -151,6 +175,7 @@ pub fn init() {
         state: State::Running,
         frame: core::ptr::null_mut(),
         _stack: None,
+        fpu: FpuState::new(),
         ticks_used: 0,
         switches: 0,
     });
@@ -194,10 +219,21 @@ pub fn spawn_with_stack(
         state: State::Ready,
         frame,
         _stack: Some(stack),
+        fpu: FpuState::new(),
         ticks_used: 0,
         switches: 0,
     });
     id
+}
+
+#[inline(always)]
+unsafe fn fxsave(area: *mut FpuState) {
+    core::arch::asm!("fxsave64 [{}]", in(reg) area, options(nostack));
+}
+
+#[inline(always)]
+unsafe fn fxrstor(area: *const FpuState) {
+    core::arch::asm!("fxrstor64 [{}]", in(reg) area, options(nostack, readonly));
 }
 
 /// Called from the timer IRQ. Returns the frame to resume.
@@ -219,6 +255,12 @@ fn tick(frame: &mut TrapFrame) -> *mut TrapFrame {
         // sure the state reflects that we are the thread actually running.
         scheduler.threads[current].state = State::Running;
         return frame as *mut TrapFrame;
+    }
+
+    // Swap the vector register file along with everything else.
+    unsafe {
+        fxsave(&mut *scheduler.threads[current].fpu);
+        fxrstor(&*scheduler.threads[next].fpu);
     }
 
     if scheduler.threads[current].state == State::Running {
@@ -299,6 +341,18 @@ pub fn kill(id: u64) -> bool {
         }
     }
     false
+}
+
+/// End the calling thread. It is never scheduled again; `reap` frees its stack.
+pub fn exit_current() -> ! {
+    {
+        let mut scheduler = SCHEDULER.lock();
+        let current = scheduler.current;
+        scheduler.threads[current].state = State::Finished;
+    }
+    loop {
+        yield_now();
+    }
 }
 
 pub fn current_id() -> u64 {

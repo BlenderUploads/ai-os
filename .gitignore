@@ -4,3 +4,5 @@ kernel/target/
 *.ppm
 *.o
 *.log
+doom/build/
+*.wad

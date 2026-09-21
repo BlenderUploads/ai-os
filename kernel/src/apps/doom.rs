@@ -1,0 +1,513 @@
+//! DOOM.
+//!
+//! The engine is the unmodified doomgeneric fork of id Software's release,
+//! vendored under `doom/` and compiled freestanding against the small C
+//! library in `doom/libc.c`. Everything below is the other side of that
+//! bridge: the eight `hal_*` hooks the library calls into, the six `DG_*`
+//! functions doomgeneric expects a platform to supply, and the window that
+//! shows the result.
+//!
+//! The game runs in its own kernel thread. `doomgeneric_Tick` blocks
+//! internally, so driving it from the compositor would stall every other
+//! window on a slow frame.
+
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::alloc::{GlobalAlloc, Layout};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::arch::pit;
+use crate::fs;
+use crate::gfx::draw::{Rect, Surface};
+use crate::gfx::font::Weight;
+use crate::gfx::palette;
+use crate::input::{Key, KeyEvent};
+use crate::sync::SpinLock;
+use crate::task;
+use crate::ui::window::{App, AppResponse, WindowMouse};
+
+/// doomgeneric's fixed output size.
+pub const DOOM_WIDTH: usize = 640;
+pub const DOOM_HEIGHT: usize = 400;
+
+/// Where the IWAD is expected to live in HALCYON's filesystem.
+const IWAD_PATH: &str = "/doom.wad";
+
+extern "C" {
+    fn doomgeneric_Create(argc: i32, argv: *mut *mut u8);
+    fn doomgeneric_Tick();
+    static mut DG_ScreenBuffer: *mut u32;
+}
+
+struct Shared {
+    /// The most recent completed frame, copied out of DOOM's own buffer.
+    frame: Vec<u32>,
+    frame_ready: bool,
+    frames: u64,
+    /// (pressed, DOOM key code)
+    keys: VecDeque<(bool, u8)>,
+    title: String,
+    failure: Option<String>,
+    started: bool,
+}
+
+impl Shared {
+    const fn new() -> Self {
+        Self {
+            frame: Vec::new(),
+            frame_ready: false,
+            frames: 0,
+            keys: VecDeque::new(),
+            title: String::new(),
+            failure: None,
+            started: false,
+        }
+    }
+}
+
+static SHARED: SpinLock<Shared> = SpinLock::new(Shared::new());
+static THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+
+// ---------------------------------------------------------------------
+// Hooks called by doom/libc.c
+// ---------------------------------------------------------------------
+
+/// Allocation. The C side keeps its own size header, because Rust's allocator
+/// wants the layout back at free time and C's `free` does not supply one.
+#[no_mangle]
+pub extern "C" fn hal_alloc(size: usize, align: usize) -> *mut u8 {
+    let Ok(layout) = Layout::from_size_align(size.max(1), align.max(16)) else {
+        return core::ptr::null_mut();
+    };
+    unsafe { crate::mm::heap::ALLOCATOR.alloc(layout) }
+}
+
+#[no_mangle]
+pub extern "C" fn hal_release(pointer: *mut u8, size: usize, align: usize) {
+    if pointer.is_null() {
+        return;
+    }
+    let Ok(layout) = Layout::from_size_align(size.max(1), align.max(16)) else {
+        return;
+    };
+    unsafe { crate::mm::heap::ALLOCATOR.dealloc(pointer, layout) }
+}
+
+#[no_mangle]
+pub extern "C" fn hal_log(text: *const u8, length: usize) {
+    if text.is_null() || length == 0 {
+        return;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(text, length) };
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        crate::serial_print!("{}", text);
+    }
+}
+
+unsafe fn c_str(pointer: *const u8) -> String {
+    if pointer.is_null() {
+        return String::new();
+    }
+    let mut length = 0;
+    while *pointer.add(length) != 0 && length < 4096 {
+        length += 1;
+    }
+    String::from_utf8_lossy(core::slice::from_raw_parts(pointer, length)).into_owned()
+}
+
+/// Hand DOOM a pointer straight into the file's bytes.
+///
+/// The IWAD is close to 30 MB; copying it on every open would be absurd, and
+/// the filesystem's storage is stable for the machine's lifetime.
+#[no_mangle]
+pub extern "C" fn hal_file_open(path: *const u8, length: *mut usize) -> *const u8 {
+    let path = unsafe { c_str(path) };
+    let filesystem = fs::FS.lock();
+    match filesystem.read(&path) {
+        Some(file) => {
+            let bytes = file.bytes();
+            unsafe { *length = bytes.len() };
+            bytes.as_ptr()
+        }
+        None => {
+            unsafe { *length = 0 };
+            core::ptr::null()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hal_file_store(path: *const u8, data: *const u8, length: usize) -> i32 {
+    let path = unsafe { c_str(path) };
+    let bytes = if data.is_null() || length == 0 {
+        Vec::new()
+    } else {
+        unsafe { core::slice::from_raw_parts(data, length) }.to_vec()
+    };
+    let mut filesystem = fs::FS.lock();
+    match filesystem.write(&path, bytes) {
+        Ok(()) => 0,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hal_file_exists(path: *const u8) -> i32 {
+    let path = unsafe { c_str(path) };
+    let filesystem = fs::FS.lock();
+    if filesystem.exists(&path) {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hal_ticks_ms() -> u32 {
+    pit::uptime_ms() as u32
+}
+
+/// DOOM's `I_Error` path ends here. It must not return, and it must not take
+/// the rest of the machine down: the message is handed to the window and the
+/// game thread retires.
+#[no_mangle]
+pub extern "C" fn hal_panic(message: *const u8) -> ! {
+    let message = unsafe { c_str(message) };
+    crate::serial_println!("[doom] {}", message);
+    SHARED.lock().failure = Some(message);
+    THREAD_RUNNING.store(false, Ordering::Release);
+    task::exit_current()
+}
+
+// ---------------------------------------------------------------------
+// The six functions doomgeneric asks a platform to implement
+// ---------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn DG_Init() {
+    let mut shared = SHARED.lock();
+    shared.frame = vec![0u32; DOOM_WIDTH * DOOM_HEIGHT];
+    shared.started = true;
+}
+
+#[no_mangle]
+pub extern "C" fn DG_DrawFrame() {
+    let source = unsafe { DG_ScreenBuffer };
+    if source.is_null() {
+        return;
+    }
+    let pixels = unsafe { core::slice::from_raw_parts(source, DOOM_WIDTH * DOOM_HEIGHT) };
+    let mut shared = SHARED.lock();
+    if shared.frame.len() != pixels.len() {
+        shared.frame = vec![0u32; pixels.len()];
+    }
+    shared.frame.copy_from_slice(pixels);
+    shared.frame_ready = true;
+    shared.frames += 1;
+}
+
+#[no_mangle]
+pub extern "C" fn DG_SleepMs(ms: u32) {
+    task::sleep_ms(ms as u64);
+}
+
+#[no_mangle]
+pub extern "C" fn DG_GetTicksMs() -> u32 {
+    pit::uptime_ms() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn DG_GetKey(pressed: *mut i32, key: *mut u8) -> i32 {
+    let mut shared = SHARED.lock();
+    match shared.keys.pop_front() {
+        Some((down, code)) => {
+            unsafe {
+                *pressed = if down { 1 } else { 0 };
+                *key = code;
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn DG_SetWindowTitle(title: *const u8) {
+    let title = unsafe { c_str(title) };
+    SHARED.lock().title = title;
+}
+
+// ---------------------------------------------------------------------
+// The game thread
+// ---------------------------------------------------------------------
+
+extern "C" fn doom_thread(_: u64) {
+    // argv has to outlive the call, and DOOM keeps the pointers.
+    let mut program = b"halcyon-doom\0".to_vec();
+    let mut flag = b"-iwad\0".to_vec();
+    let mut path = format!("{}\0", IWAD_PATH).into_bytes();
+    let mut argv: Vec<*mut u8> = vec![
+        program.as_mut_ptr(),
+        flag.as_mut_ptr(),
+        path.as_mut_ptr(),
+        core::ptr::null_mut(),
+    ];
+    core::mem::forget(program);
+    core::mem::forget(flag);
+    core::mem::forget(path);
+
+    crate::serial_println!("[doom] starting, iwad {}", IWAD_PATH);
+    unsafe {
+        doomgeneric_Create(3, argv.as_mut_ptr());
+    }
+    core::mem::forget(argv);
+
+    crate::serial_println!("[doom] DOOM-RUNNING");
+    while THREAD_RUNNING.load(Ordering::Acquire) {
+        unsafe { doomgeneric_Tick() };
+    }
+    task::exit_current()
+}
+
+/// Translate a HALCYON key event into DOOM's own key numbering.
+fn doom_key(event: &KeyEvent) -> Option<u8> {
+    let code = match event.key {
+        Key::Left => 0xAC,
+        Key::Right => 0xAE,
+        Key::Up => 0xAD,
+        Key::Down => 0xAF,
+        Key::Enter => 13,
+        Key::Escape => 27,
+        Key::Tab => 9,
+        Key::Backspace => 0x7F,
+        Key::F1 => 0x80 + 0x3B,
+        Key::F2 => 0x80 + 0x3C,
+        Key::F3 => 0x80 + 0x3D,
+        Key::F4 => 0x80 + 0x3E,
+        Key::F5 => 0x80 + 0x3F,
+        Key::F6 => 0x80 + 0x40,
+        Key::F7 => 0x80 + 0x41,
+        Key::F8 => 0x80 + 0x42,
+        Key::F9 => 0x80 + 0x43,
+        Key::F10 => 0x80 + 0x44,
+        Key::F12 => 0x80 + 0x58,
+        Key::Home => 0x80 + 0x47,
+        Key::End => 0x80 + 0x4F,
+        Key::PageUp => 0x80 + 0x49,
+        Key::PageDown => 0x80 + 0x51,
+        Key::Insert => 0x80 + 0x52,
+        Key::Delete => 0x80 + 0x53,
+        Key::Char => {
+            let character = event.character?;
+            return Some(match character {
+                // Space is use, ctrl is fire; both also have their own keys.
+                ' ' => 0xA2,
+                other => (other as u32 & 0xFF) as u8,
+            });
+        }
+        _ => return None,
+    };
+    Some(code as u8)
+}
+
+pub struct Doom {
+    dirty: bool,
+    last_frame: u64,
+    /// Scratch copy so the surface blit does not hold the shared lock.
+    scratch: Vec<u32>,
+    missing_wad: bool,
+}
+
+impl Doom {
+    pub fn new() -> Self {
+        let missing_wad = !fs::FS.lock().exists(IWAD_PATH);
+        if !missing_wad && !THREAD_RUNNING.swap(true, Ordering::AcqRel) {
+            task::spawn_with_stack("doom", doom_thread, 0, 512 * 1024);
+        }
+        Self {
+            dirty: true,
+            last_frame: 0,
+            scratch: Vec::new(),
+            missing_wad,
+        }
+    }
+
+    fn draw_missing_wad(&self, surface: &mut Surface) {
+        surface.clear(palette::rgb(0x0A, 0x04, 0x04));
+        let width = surface.width as i32;
+        surface.text_centered("NO IWAD FOUND", width / 2, 40, palette::ERROR, Weight::Bold);
+        let lines = [
+            "DOOM needs a WAD file, and none was found at /doom.wad.",
+            "",
+            "Build an ISO that includes one with:",
+            "    make doom-iso",
+            "",
+            "That fetches Freedoom, which is BSD-licensed and freely",
+            "redistributable. Your own doom1.wad or doom.wad works too:",
+            "drop it in as doom.wad before building.",
+        ];
+        let mut y = 76;
+        for line in lines {
+            surface.text(line, 20, y, palette::TEXT_DIM);
+            y += 18;
+        }
+    }
+}
+
+impl App for Doom {
+    fn draw(&mut self, surface: &mut Surface, _focused: bool) {
+        if self.missing_wad {
+            self.draw_missing_wad(surface);
+            self.dirty = false;
+            return;
+        }
+
+        let (ready, failure) = {
+            let mut shared = SHARED.lock();
+            let failure = shared.failure.clone();
+            let ready = if shared.frame_ready && shared.frames != self.last_frame {
+                self.last_frame = shared.frames;
+                if self.scratch.len() != shared.frame.len() {
+                    self.scratch = vec![0u32; shared.frame.len()];
+                }
+                self.scratch.copy_from_slice(&shared.frame);
+                shared.frame_ready = false;
+                true
+            } else {
+                !self.scratch.is_empty()
+            };
+            (ready, failure)
+        };
+
+        surface.clear(palette::BLACK);
+
+        if let Some(message) = failure {
+            surface.text_centered(
+                "DOOM STOPPED",
+                surface.width as i32 / 2,
+                30,
+                palette::ERROR,
+                Weight::Bold,
+            );
+            surface.text(&message, 16, 60, palette::TEXT);
+            self.dirty = false;
+            return;
+        }
+
+        if !ready {
+            surface.text_centered(
+                "loading DOOM...",
+                surface.width as i32 / 2,
+                surface.height as i32 / 2,
+                palette::AMBER,
+                Weight::Bold,
+            );
+            return;
+        }
+
+        // Integer-scale to fit, so the pixels stay square and sharp.
+        let width = surface.width as i32;
+        let height = surface.height as i32;
+        let scale = (width / DOOM_WIDTH as i32)
+            .min(height / DOOM_HEIGHT as i32)
+            .max(1);
+        let drawn_w = DOOM_WIDTH as i32 * scale;
+        let drawn_h = DOOM_HEIGHT as i32 * scale;
+        let origin_x = (width - drawn_w) / 2;
+        let origin_y = (height - drawn_h) / 2;
+
+        if scale == 1 {
+            for row in 0..DOOM_HEIGHT as i32 {
+                let target_y = origin_y + row;
+                if target_y < 0 || target_y >= height {
+                    continue;
+                }
+                for column in 0..DOOM_WIDTH as i32 {
+                    let target_x = origin_x + column;
+                    if target_x < 0 || target_x >= width {
+                        continue;
+                    }
+                    let pixel = self.scratch[row as usize * DOOM_WIDTH + column as usize];
+                    surface.pixel(target_x, target_y, pixel & 0x00FF_FFFF);
+                }
+            }
+        } else {
+            for row in 0..DOOM_HEIGHT as i32 {
+                for column in 0..DOOM_WIDTH as i32 {
+                    let pixel = self.scratch[row as usize * DOOM_WIDTH + column as usize];
+                    surface.fill_rect(
+                        Rect::new(
+                            origin_x + column * scale,
+                            origin_y + row * scale,
+                            scale,
+                            scale,
+                        ),
+                        pixel & 0x00FF_FFFF,
+                    );
+                }
+            }
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyEvent, response: &mut AppResponse) {
+        if self.missing_wad {
+            return;
+        }
+        // F11 belongs to the window manager, not to DOOM.
+        if event.key == Key::F11 {
+            return;
+        }
+        if let Some(code) = doom_key(event) {
+            let mut shared = SHARED.lock();
+            // Bound the queue: a key held during a long frame must not grow it
+            // without limit.
+            if shared.keys.len() < 64 {
+                shared.keys.push_back((event.pressed, code));
+            }
+        }
+        let _ = response;
+    }
+
+    fn on_mouse(&mut self, _event: &WindowMouse, _response: &mut AppResponse) {}
+
+    fn tick(&mut self, _now_ms: u64, response: &mut AppResponse) {
+        let shared = SHARED.lock();
+        if shared.frames != self.last_frame || shared.failure.is_some() {
+            self.dirty = true;
+        }
+        if !shared.title.is_empty() {
+            response.retitle = Some(shared.title.clone());
+        }
+    }
+
+    fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    fn min_size(&self) -> (i32, i32) {
+        (DOOM_WIDTH as i32, DOOM_HEIGHT as i32)
+    }
+}
+
+/// Is a playable IWAD present?
+pub fn wad_present() -> bool {
+    fs::FS.lock().exists(IWAD_PATH)
+}
+
+pub fn status() -> String {
+    let shared = SHARED.lock();
+    if let Some(failure) = &shared.failure {
+        return format!("doom: stopped ({})", failure);
+    }
+    if !shared.started {
+        return "doom: not started".to_string();
+    }
+    format!("doom: {} frames rendered", shared.frames)
+}

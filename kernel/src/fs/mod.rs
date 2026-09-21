@@ -12,11 +12,35 @@ use alloc::vec::Vec;
 
 use crate::sync::SpinLock;
 
+/// Where a file's bytes live.
+///
+/// A module GRUB loaded is already sitting in physical memory that the frame
+/// allocator has marked reserved, so the filesystem borrows it rather than
+/// copying. That matters for the DOOM IWAD, which is nearly 30 MB.
+#[derive(Clone)]
+pub enum Bytes {
+    Owned(Vec<u8>),
+    Borrowed(&'static [u8]),
+}
+
 #[derive(Clone)]
 pub struct File {
-    pub data: Vec<u8>,
-    /// Came from the initrd, so it cannot be overwritten in place.
+    pub data: Bytes,
+    /// Came from the initrd, so it is read-only in spirit.
     pub from_initrd: bool,
+}
+
+impl File {
+    pub fn bytes(&self) -> &[u8] {
+        match &self.data {
+            Bytes::Owned(vec) => vec,
+            Bytes::Borrowed(slice) => slice,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes().len()
+    }
 }
 
 pub struct FileSystem {
@@ -42,7 +66,7 @@ impl FileSystem {
         self.files.insert(
             path,
             File {
-                data,
+                data: Bytes::Owned(data),
                 from_initrd: false,
             },
         );
@@ -53,7 +77,9 @@ impl FileSystem {
         let path = normalise(path);
         match self.files.get_mut(&path) {
             Some(file) => {
-                file.data.extend_from_slice(data);
+                let mut combined = file.bytes().to_vec();
+                combined.extend_from_slice(data);
+                file.data = Bytes::Owned(combined);
                 file.from_initrd = false;
                 Ok(())
             }
@@ -77,7 +103,7 @@ impl FileSystem {
     pub fn list(&self) -> Vec<(String, usize, bool)> {
         self.files
             .iter()
-            .map(|(path, file)| (path.clone(), file.data.len(), file.from_initrd))
+            .map(|(path, file)| (path.clone(), file.len(), file.from_initrd))
             .collect()
     }
 
@@ -90,12 +116,12 @@ impl FileSystem {
         self.files
             .iter()
             .filter(|(path, _)| path.starts_with(&prefix))
-            .map(|(path, file)| (path.clone(), file.data.len(), file.from_initrd))
+            .map(|(path, file)| (path.clone(), file.len(), file.from_initrd))
             .collect()
     }
 
     pub fn total_bytes(&self) -> usize {
-        self.files.values().map(|file| file.data.len()).sum()
+        self.files.values().map(|file| file.len()).sum()
     }
 
     pub fn count(&self) -> usize {
@@ -142,13 +168,39 @@ pub fn mount_initrd(phys_start: u64, phys_end: u64) -> usize {
         filesystem.files.insert(
             path,
             File {
-                data: entry.data.to_vec(),
+                data: Bytes::Owned(entry.data.to_vec()),
                 from_initrd: true,
             },
         );
         loaded += 1;
     }
     loaded
+}
+
+/// Publish a GRUB module as a file, borrowing its memory rather than copying.
+///
+/// The frame allocator has already marked the module's pages reserved, so the
+/// slice stays valid for the life of the machine.
+pub fn mount_module(path: &str, phys_start: u64, phys_end: u64) -> usize {
+    if phys_end <= phys_start {
+        return 0;
+    }
+    let length = (phys_end - phys_start) as usize;
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            crate::mm::paging::phys_to_virt(phys_start) as *const u8,
+            length,
+        )
+    };
+    let mut filesystem = FS.lock();
+    filesystem.files.insert(
+        normalise(path),
+        File {
+            data: Bytes::Borrowed(bytes),
+            from_initrd: true,
+        },
+    );
+    length
 }
 
 /// Create the directories HALCYON expects to exist, with a little content so a

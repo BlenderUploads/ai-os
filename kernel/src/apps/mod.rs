@@ -1,6 +1,8 @@
 //! Built-in applications and the launcher registry.
 
 pub mod about;
+#[cfg(feature = "doom")]
+pub mod doom;
 pub mod editor;
 pub mod files;
 pub mod monitor;
@@ -88,6 +90,15 @@ pub fn registry() -> Vec<AppEntry> {
             width: 460,
             height: 380,
             build: || Box::new(snake::Snake::new()) as Box<dyn App>,
+        },
+        #[cfg(feature = "doom")]
+        AppEntry {
+            name: "doom",
+            title: "DOOM",
+            icon: glyph::BLOCK,
+            width: doom::DOOM_WIDTH as i32 + 2,
+            height: doom::DOOM_HEIGHT as i32 + 23,
+            build: || Box::new(doom::Doom::new()) as Box<dyn App>,
         },
         AppEntry {
             name: "about",

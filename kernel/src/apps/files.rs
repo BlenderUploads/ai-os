@@ -55,7 +55,7 @@ impl Files {
         let Some(file) = filesystem.read(path) else {
             return;
         };
-        match core::str::from_utf8(&file.data) {
+        match core::str::from_utf8(file.bytes()) {
             Ok(text) => {
                 for line in text.lines().take(200) {
                     self.preview.push(line.to_string());
@@ -63,7 +63,7 @@ impl Files {
             }
             Err(_) => {
                 // Hex dump the first few rows of a binary file.
-                for chunk in file.data.chunks(16).take(24) {
+                for chunk in file.bytes().chunks(16).take(24) {
                     let mut row = String::new();
                     for byte in chunk {
                         row.push_str(&format!("{:02x} ", byte));

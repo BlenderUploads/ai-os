@@ -87,7 +87,7 @@ impl Shell {
         ));
         let filesystem = fs::FS.lock();
         if let Some(file) = filesystem.read("/motd.txt") {
-            if let Ok(text) = core::str::from_utf8(&file.data) {
+            if let Ok(text) = core::str::from_utf8(file.bytes()) {
                 lines.push(Line::new("", palette::TEXT));
                 for line in text.lines() {
                     lines.push(Line::new(line.to_string(), palette::CYAN_DIM));
@@ -312,13 +312,13 @@ impl Shell {
         }
         let filesystem = fs::FS.lock();
         match filesystem.read(path) {
-            Some(file) => match core::str::from_utf8(&file.data) {
+            Some(file) => match core::str::from_utf8(file.bytes()) {
                 Ok(text) => text
                     .lines()
                     .map(|line| Line::new(line.to_string(), palette::TEXT))
                     .collect(),
                 Err(_) => alloc::vec![Line::new(
-                    format!("{}: {} bytes of binary", path, file.data.len()),
+                    format!("{}: {} bytes of binary", path, file.len()),
                     palette::TEXT_DIM
                 )],
             },

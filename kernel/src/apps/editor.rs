@@ -55,7 +55,7 @@ impl Editor {
         let filesystem = fs::FS.lock();
         match filesystem.read(path) {
             Some(file) => {
-                let text = core::str::from_utf8(&file.data).unwrap_or("<binary file>");
+                let text = core::str::from_utf8(file.bytes()).unwrap_or("<binary file>");
                 self.lines = text.lines().map(|line| line.to_string()).collect();
                 if self.lines.is_empty() {
                     self.lines.push(String::new());

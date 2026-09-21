@@ -8,6 +8,12 @@ description = "HALCYON — a from-scratch x86_64 operating system"
 # Everything below `core` and `alloc` is written in this repository.
 [dependencies]
 
+[features]
+default = []
+# Links the vendored DOOM engine (doom/), which is GPL-2. Off by default so a
+# plain build stays MIT-licensed; see doom/README.md.
+doom = []
+
 [[bin]]
 name = "halcyon"
 path = "src/main.rs"

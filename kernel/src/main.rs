@@ -147,8 +147,15 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
     }
 
     let mut mounted = 0;
+    let mut extra_modules = 0u64;
     for module in info.modules() {
-        mounted += fs::mount_initrd(module.start, module.end);
+        // GRUB's module string says what each one is.
+        match module.name() {
+            "doom" => {
+                extra_modules += fs::mount_module("/doom.wad", module.start, module.end) as u64;
+            }
+            _ => mounted += fs::mount_initrd(module.start, module.end),
+        }
     }
     fs::seed_defaults();
     let filesystem = fs::FS.lock();
@@ -161,10 +168,17 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
             Status::Warn
         },
         format!(
-            "filesystem: {} file(s) from initrd, {} total, {} bytes in RAM",
+            "filesystem: {} file(s) from initrd, {} total, {} bytes",
             mounted, fs_count, fs_bytes
         ),
     );
+    if extra_modules > 0 {
+        let (size, unit) = mm::format_bytes(extra_modules);
+        screen.step(
+            Status::Ok,
+            format!("doom: {} {} IWAD mounted in place at /doom.wad", size, unit),
+        );
+    }
 
     let ps2 = drivers::ps2::init(!info.cmdline().contains("nomouse"));
     drivers::keyboard::init();

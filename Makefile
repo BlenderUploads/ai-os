@@ -17,13 +17,17 @@ ISO        := $(BUILD)/halcyon.iso
 INITRD     := $(BUILD)/initrd.tar
 
 CARGO_FLAGS := $(if $(filter release,$(PROFILE)),--release,)
+# `make doom-iso` sets this, which links the GPL-2 DOOM engine in doom/.
+FEATURES   ?=
+CARGO_FLAGS += $(if $(FEATURES),--features $(FEATURES),)
+DOOM_WAD   := $(BUILD)/doom.wad
 
 QEMU       := qemu-system-x86_64
 QEMU_COMMON := -m 512M -serial stdio -no-reboot -cdrom $(ISO)
 OVMF_CODE  := /usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS  := /usr/share/OVMF/OVMF_VARS_4M.fd
 
-.PHONY: all kernel iso run run-uefi smoke screenshots clean fmt check
+.PHONY: all kernel iso run run-uefi smoke screenshots clean fmt check doom-iso run-doom wad
 
 all: iso
 
@@ -47,10 +51,27 @@ iso: kernel $(INITRD)
 	cp $(KERNEL_ELF) $(ISO_ROOT)/boot/halcyon.elf
 	cp $(INITRD) $(ISO_ROOT)/boot/initrd.tar
 	cp iso/boot/grub/grub.cfg $(ISO_ROOT)/boot/grub/grub.cfg
+	@if [ -n "$(FEATURES)" ] && [ -s $(DOOM_WAD) ]; then \
+		cp $(DOOM_WAD) $(ISO_ROOT)/boot/doom.wad; \
+		sed -i 's|module2 /boot/initrd.tar initrd|module2 /boot/initrd.tar initrd\n    module2 /boot/doom.wad doom|' \
+			$(ISO_ROOT)/boot/grub/grub.cfg; \
+		echo "iso: including $(DOOM_WAD)"; \
+	fi
 	grub-mkrescue -o $(ISO) $(ISO_ROOT) 2>/dev/null
 	@echo
 	@echo "ISO: $(ISO) ($$(du -h $(ISO) | cut -f1))"
 	@sha256sum $(ISO)
+
+# Fetch an IWAD (Freedoom unless you supply your own) into build/doom.wad.
+wad:
+	tools/fetch-doom-wad.sh $(DOOM_WAD)
+
+# An ISO with DOOM. The combined kernel is GPL-2; see doom/README.md.
+doom-iso: wad
+	$(MAKE) iso FEATURES=doom ISO=$(BUILD)/halcyon-doom.iso
+
+run-doom: doom-iso
+	$(QEMU) -m 1G -serial stdio -no-reboot -cdrom $(BUILD)/halcyon-doom.iso
 
 run: iso
 	$(QEMU) $(QEMU_COMMON)
