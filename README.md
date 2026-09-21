@@ -19,7 +19,7 @@ Runs entirely in RAM and never writes to a disk.
 
 ## What it actually is
 
-A hobby OS that boots to a graphical desktop with a real shell. Roughly 9,000
+A hobby OS that boots to a graphical desktop with a real shell. Around 13,000
 lines of Rust, built on the stable toolchain — no nightly, no `build-std`, no
 custom target JSON.
 
@@ -31,10 +31,13 @@ custom target JSON.
   heap backing Rust's `alloc`.
 - **Threads**: pre-emptive round-robin kernel threads, plus an idle thread that
   halts the CPU when there is nothing to do.
-- **Graphics**: a double-buffered compositor, a font drawn for this system, and
-  a CRT pass that darkens alternate scanlines.
+- **Graphics**: a damage-tracked compositor that repaints only what changed, a
+  font drawn for this system, and a CRT pass that darkens alternate scanlines.
+- **Desktop**: maximise, fullscreen, edge resizing, drag-to-edge snapping,
+  context menus, tile and cascade.
 - **Shell**: `hsh`, with **ORACLE** — a small Lisp with working tail calls —
   as its interpreter.
+- **And DOOM.** The real engine, in a window. See [doom/README.md](doom/README.md).
 
 `ORACLE` also answers questions in English, from a hand-written table. It is not
 a language model; there is no model on this machine and no network stack to
@@ -95,6 +98,7 @@ make iso        # -> build/halcyon.iso
 make run        # boot it under QEMU (BIOS)
 make run-uefi   # boot it under QEMU (UEFI, via OVMF)
 make smoke      # headless boot test, both firmwares
+make doom-iso   # -> build/halcyon-doom.iso (GPL-2; see doom/README.md)
 ```
 
 ## Using it
@@ -103,10 +107,13 @@ The desktop opens with an About window and a terminal.
 
 | | |
 |---|---|
-| **F1–F7** | terminal, monitor, files, editor, paint, snake, about |
-| **alt+tab** | cycle windows |
-| **ctrl+W** | close the focused window |
-| drag the title bar | move a window; the corner grip resizes it |
+| **F1–F10** | terminal, files, editor, monitor, devices, calculator, tetris, snake, paint, manual |
+| **alt+tab** | cycle windows (shift to go back) |
+| **ctrl+W** / **ctrl+M** | close / minimise |
+| **alt+up / down / left / right** | maximise, restore, snap to half the screen |
+| **F11** | fullscreen, and back |
+| right-click | context menus on the desktop, the taskbar and title bars |
+| drag a title bar | move it; drag any edge or corner to resize; drag to a screen edge to snap |
 
 In the terminal, `help` lists the commands and `lisp` the language. Anything in
 parentheses is evaluated:
@@ -130,6 +137,27 @@ halcyon> (down 200000)
 
 <img src="docs/screenshots/terminal.png" width="820" alt="The HALCYON terminal showing Lisp evaluation and an ORACLE reply">
 
+## DOOM
+
+<div align="center">
+<img src="docs/screenshots/doom.png" width="820" alt="DOOM running in a window on HALCYON, showing the 3D view and the status bar">
+</div>
+
+Not a lookalike — the real engine, running in a window with menus, the
+renderer, the HUD and saves. The port is [doomgeneric](https://github.com/ozkl/doomgeneric)
+compiled freestanding against a C library written for HALCYON, because the
+system has none of its own.
+
+```sh
+make doom-iso      # fetches Freedoom, builds build/halcyon-doom.iso
+make run-doom
+```
+
+**It is a separate build on purpose.** The DOOM engine is GPL-2 and the rest of
+HALCYON is MIT, so `make iso` never compiles it and stays MIT, while
+`make doom-iso` produces a GPL-2 combined work. [doom/README.md](doom/README.md)
+covers that, how the port works, and how to use your own WAD.
+
 ## The rest of it
 
 | | |
@@ -138,8 +166,12 @@ halcyon> (down 200000)
 | **System monitor** — live physical memory, heap usage and its history, and the thread table. | **Files** — the RAM filesystem, seeded from the initrd, with a preview pane that hex-dumps binaries. |
 | <img src="docs/screenshots/editor.png" width="390" alt="Text editor with line numbers editing a file"> | <img src="docs/screenshots/paint.png" width="390" alt="Paint window with coloured strokes"> |
 | **Editor** — line numbers, a modified marker, ctrl+S to save back to RAM. | **Paint** — strokes interpolate between mouse samples, so fast movement leaves no gaps. |
-| <img src="docs/screenshots/snake.png" width="390" alt="Snake running in a window"> | <img src="docs/screenshots/fault.png" width="390" alt="The red HALCYON fault screen showing a page fault and register dump"> |
-| **Snake** — every operating system needs one. | **Faults** — when something breaks, HALCYON says what and where, then halts. Provoke it from the GRUB self-test entry. |
+| <img src="docs/screenshots/devices.png" width="390" alt="Device browser showing the PCI bus"> | <img src="docs/screenshots/calculator.png" width="390" alt="Calculator showing 12.5 * 4 = 50"> |
+| **Devices** — CPUID and features, a live PCI enumeration, and the real memory map. | **Calculator** — fixed point, because the kernel is soft-float and a calculator has no business waking the FPU. |
+| <img src="docs/screenshots/tetris.png" width="390" alt="Tetris with a landing shadow and next-piece preview"> | <img src="docs/screenshots/snake.png" width="390" alt="Snake running in a window"> |
+| **Tetris** — landing shadow, next-piece preview, the scoring curve where a four-line clear beats four singles. | **Snake** — every operating system needs one. |
+| <img src="docs/screenshots/manual.png" width="390" alt="The manual, reading pages from the initrd"> | <img src="docs/screenshots/fault.png" width="390" alt="The red HALCYON fault screen showing a page fault and register dump"> |
+| **Manual** — the help pages ship in the initrd, so they live with the system. | **Faults** — when something breaks, HALCYON says what and where, then halts. Provoke it from the GRUB self-test entry. |
 
 ## Boot sequence
 
@@ -151,9 +183,10 @@ halcyon> (down 200000)
 
 `tools/smoke.py` boots the ISO in QEMU with no display, asserts on markers in
 the serial log, and drives the machine through the QEMU monitor — typing shell
-commands, dragging windows by their title bars, playing Snake — capturing PNG
-screenshots at each step. It exits non-zero if a marker is missing, a panic
-appears, or the boot times out.
+commands, dragging windows by their title bars, playing Snake, starting a game
+of DOOM — capturing PNG screenshots at each step. It exits non-zero if a marker
+is missing, a panic appears, or the boot times out. Every screenshot in this
+README came out of it.
 
 The kernel also checks itself at boot and reports on the boot screen:
 
@@ -177,10 +210,12 @@ kernel/src/
   task/      pre-emptive threads and the scheduler
   drivers/   PS/2 keyboard and mouse, serial, RTC, PCI, PC speaker
   gfx/       framebuffer, surfaces, the font, the CRT pass
-  ui/        compositor, window manager, theme, cursor
+  ui/        compositor, window manager, menus, theme, cursor
   fs/        tar initrd reader and the RAM filesystem
   oracle/    the Lisp: reader, evaluator, builtins, persona
-  apps/      terminal, monitor, files, editor, paint, snake, about
+  apps/      terminal, files, editor, monitor, devices, calculator,
+             tetris, snake, paint, manual, about -- and doom
+doom/        the vendored DOOM engine, its C library shim, and its licence
 tools/       mkfont.py (the font), smoke.py (the test harness), mkinitrd.sh
 ```
 
@@ -192,6 +227,7 @@ tools/       mkfont.py (the font), smoke.py (the test harness), mkinitrd.sh
 | [FONT.md](docs/FONT.md) | how the glyphs were drawn |
 | [HARDWARE.md](docs/HARDWARE.md) | running it on a real machine, and what can go wrong |
 | [ADDING-AN-APP.md](docs/ADDING-AN-APP.md) | write a window in about sixty lines |
+| [doom/README.md](doom/README.md) | the DOOM port, and its licensing |
 
 ## What it deliberately does not have
 
@@ -201,7 +237,9 @@ enough to read.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE) — for everything except `doom/`, which vendors the
+GPL-2 DOOM engine. `make iso` does not compile it; `make doom-iso` does, and the
+resulting ISO is a GPL-2 work. [doom/README.md](doom/README.md) spells that out.
 
 The font is drawn in `tools/mkfont.py` and carries no third-party licence, which
 is precisely why it was drawn rather than borrowed.

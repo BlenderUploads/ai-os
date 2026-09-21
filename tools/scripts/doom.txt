@@ -1,0 +1,24 @@
+# Launch DOOM and let it get as far as the attract-mode demo, which is the
+# 3D renderer running for real.
+
+wait 2
+# DOOM sits at F7 when it is compiled in.
+keys f7
+wait 14
+shot doom-title
+wait 12
+shot doom-demo
+# Into the menu, then a new game on the default skill.
+keys esc
+wait 2
+keys ret
+wait 1.5
+keys ret
+wait 1.5
+keys ret
+wait 4
+keys up
+wait 0.4
+keys right
+wait 2
+shot doom-ingame

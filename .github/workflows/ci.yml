@@ -70,9 +70,20 @@ jobs:
             --boot-wait 20 --expect HALCYON-DESKTOP-OK \
             --script tools/scripts/terminal.txt --screenshots build/shots
 
+      - name: Build the DOOM ISO
+        run: make doom-iso
+
+      - name: Boot test (DOOM)
+        run: |
+          python3 tools/smoke.py --iso build/halcyon-doom.iso --firmware bios \
+            --boot-wait 26 --memory 1G --expect DOOM-RUNNING \
+            --script tools/scripts/doom.txt --screenshots build/shots
+
       - name: Checksum
         run: |
-          cd build && sha256sum halcyon.iso | tee halcyon.iso.sha256
+          cd build
+          sha256sum halcyon.iso | tee halcyon.iso.sha256
+          sha256sum halcyon-doom.iso | tee halcyon-doom.iso.sha256
 
       - uses: actions/upload-artifact@v4
         with:
@@ -80,6 +91,15 @@ jobs:
           path: |
             build/halcyon.iso
             build/halcyon.iso.sha256
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          # Separate artifact: this one links the GPL-2 DOOM engine.
+          name: halcyon-doom-iso
+          path: |
+            build/halcyon-doom.iso
+            build/halcyon-doom.iso.sha256
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -95,4 +115,6 @@ jobs:
           files: |
             build/halcyon.iso
             build/halcyon.iso.sha256
+            build/halcyon-doom.iso
+            build/halcyon-doom.iso.sha256
           generate_release_notes: true
