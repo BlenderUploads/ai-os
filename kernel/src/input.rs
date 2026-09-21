@@ -25,6 +25,11 @@ pub enum Key {
     Insert,
     Delete,
     CapsLock,
+    /// The modifiers, reported as keys in their own right as well as in
+    /// `Modifiers`. Most apps ignore them; a game does not.
+    Shift,
+    Control,
+    Alt,
     F1,
     F2,
     F3,

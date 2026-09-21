@@ -46,6 +46,7 @@ pub const CATALOGUE: &[(&str, &str)] = &[
     ("threads", "list of running threads"),
     ("pci", "enumerate the PCI bus"),
     ("beep", "(beep frequency milliseconds)"),
+    ("tone", "(tone frequency ms) through the sound card"),
     ("peek poke", "read and write physical memory"),
     ("ls cat write-file rm", "the in-memory filesystem"),
     ("env", "every name currently bound"),
@@ -440,6 +441,17 @@ pub fn install(interpreter: &mut Interpreter) {
         };
         speaker::beep(frequency, duration);
         Ok(Value::Nil)
+    });
+
+    // The same idea an octave up in fidelity: a triangle wave through the
+    // audio codec rather than a square wave through the speaker.
+    install_one(interpreter, "tone", |_, args| {
+        let (frequency, duration) = match args.len() {
+            0 => (440, 500),
+            1 => (args[0].as_int()? as u32, 500),
+            _ => (args[0].as_int()? as u32, args[1].as_int()? as u32),
+        };
+        Ok(Value::Bool(crate::audio::tone(frequency, duration)))
     });
 
     // Physical memory access, through the physical map.

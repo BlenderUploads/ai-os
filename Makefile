@@ -23,11 +23,13 @@ CARGO_FLAGS += $(if $(FEATURES),--features $(FEATURES),)
 DOOM_WAD   := $(BUILD)/doom.wad
 
 QEMU       := qemu-system-x86_64
-QEMU_COMMON := -m 512M -serial stdio -no-reboot -cdrom $(ISO)
+# An AC'97 codec, which is what HALCYON's audio driver knows how to talk to.
+QEMU_AUDIO := -device AC97
+QEMU_COMMON := -m 512M -serial stdio -no-reboot $(QEMU_AUDIO) -cdrom $(ISO)
 OVMF_CODE  := /usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS  := /usr/share/OVMF/OVMF_VARS_4M.fd
 
-.PHONY: all kernel iso run run-uefi smoke screenshots clean fmt check doom-iso run-doom wad
+.PHONY: all kernel iso run run-uefi smoke smoke-doom screenshots clean fmt check doom-iso run-doom wad
 
 all: iso
 
@@ -39,7 +41,11 @@ kernel:
 
 $(KERNEL_ELF): kernel
 
-$(INITRD): $(wildcard initrd/*) | $(BUILD)
+# Recursive: `wildcard initrd/*` would miss edits inside initrd/help, because
+# changing a file's contents does not touch its directory's timestamp.
+INITRD_FILES := $(shell find initrd -type f 2>/dev/null)
+
+$(INITRD): $(INITRD_FILES) | $(BUILD)
 	tools/mkinitrd.sh initrd $(INITRD)
 
 $(BUILD):
@@ -71,7 +77,7 @@ doom-iso: wad
 	$(MAKE) iso FEATURES=doom ISO=$(BUILD)/halcyon-doom.iso
 
 run-doom: doom-iso
-	$(QEMU) -m 1G -serial stdio -no-reboot -cdrom $(BUILD)/halcyon-doom.iso
+	$(QEMU) -m 1G -serial stdio -no-reboot $(QEMU_AUDIO) -cdrom $(BUILD)/halcyon-doom.iso
 
 run: iso
 	$(QEMU) $(QEMU_COMMON)
@@ -83,8 +89,16 @@ run-uefi: iso
 		-drive if=pflash,format=raw,unit=1,format=raw,file=$(BUILD)/OVMF_VARS.fd
 
 smoke: iso
-	python3 tools/smoke.py --iso $(ISO) --firmware bios
-	python3 tools/smoke.py --iso $(ISO) --firmware uefi
+	python3 tools/smoke.py --iso $(ISO) --firmware bios --audio
+	python3 tools/smoke.py --iso $(ISO) --firmware uefi --audio
+
+# Boot DOOM, play a few seconds, and assert the captured audio is not silence.
+smoke-doom: doom-iso
+	python3 tools/smoke.py --iso $(BUILD)/halcyon-doom.iso --firmware bios \
+		--memory 1G --boot-wait 26 --expect DOOM-RUNNING \
+		--expect POINTER-GRABBED --expect POINTER-RELEASED \
+		--script tools/scripts/doom.txt \
+		--audio-wav $(BUILD)/doom-audio.wav
 
 screenshots: iso
 	python3 tools/smoke.py --iso $(ISO) --firmware bios --screenshots $(BUILD)/shots

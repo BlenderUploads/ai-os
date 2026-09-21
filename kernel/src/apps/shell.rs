@@ -60,6 +60,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("cpu", "processor identification"),
     ("pci", "enumerate the PCI bus"),
     ("beep [freq] [ms]", "the PC speaker"),
+    ("audio [freq] [ms]", "the sound card, and a tone through it"),
     ("clear", "clear the scrollback"),
     ("run <app>", "open an application window"),
     ("reboot", "restart the machine"),
@@ -129,6 +130,7 @@ impl Shell {
             "cpu" => self.cpu(),
             "pci" => self.pci(),
             "beep" => self.beep(rest),
+            "audio" => self.audio(rest),
             "lisp" => self.lisp_reference(),
             "reboot" => {
                 speaker::beep(660, 120);
@@ -512,6 +514,28 @@ impl Shell {
             ),
             palette::TEXT_DIM
         )]
+    }
+
+    fn audio(&self, rest: &str) -> Vec<Line> {
+        let mut lines = alloc::vec![Line::new(
+            match crate::drivers::ac97::describe() {
+                Some(description) => description,
+                None => "no AC'97 codec on this machine".to_string(),
+            },
+            palette::AMBER
+        )];
+        lines.push(Line::new(crate::audio::status(), palette::TEXT_DIM));
+
+        let mut parts = rest.split_whitespace();
+        let frequency: u32 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(440);
+        let duration: u32 = parts.next().and_then(|v| v.parse().ok()).unwrap_or(700);
+        if crate::audio::tone(frequency, duration) {
+            lines.push(Line::new(
+                format!("playing {} Hz for {} ms", frequency, duration),
+                palette::TEXT,
+            ));
+        }
+        lines
     }
 
     fn environment(&self) -> Vec<Line> {

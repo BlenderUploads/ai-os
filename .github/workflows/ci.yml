@@ -50,13 +50,13 @@ jobs:
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
             --boot-wait 20 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
-            --expect SCHED-OK --screenshots build/shots
+            --expect SCHED-OK --audio --screenshots build/shots
 
       - name: Boot test (UEFI)
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware uefi \
             --boot-wait 28 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
-            --screenshots build/shots
+            --audio --screenshots build/shots
 
       - name: Fault handler test
         run: |
@@ -68,16 +68,21 @@ jobs:
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
             --boot-wait 20 --expect HALCYON-DESKTOP-OK \
-            --script tools/scripts/terminal.txt --screenshots build/shots
+            --script tools/scripts/terminal.txt --screenshots build/shots \
+            --audio-wav build/tone.wav
 
       - name: Build the DOOM ISO
         run: make doom-iso
 
-      - name: Boot test (DOOM)
+      # Plays a game with the keyboard and the mouse, records what the codec
+      # puts out, and fails if it turns out to be silence.
+      - name: Boot test (DOOM, with sound)
         run: |
           python3 tools/smoke.py --iso build/halcyon-doom.iso --firmware bios \
             --boot-wait 26 --memory 1G --expect DOOM-RUNNING \
-            --script tools/scripts/doom.txt --screenshots build/shots
+            --expect POINTER-GRABBED --expect POINTER-RELEASED \
+            --script tools/scripts/doom.txt --screenshots build/shots \
+            --audio-wav build/doom-audio.wav
 
       - name: Checksum
         run: |
@@ -105,7 +110,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: halcyon-screenshots
-          path: build/shots/*.png
+          path: |
+            build/shots/*.png
+            build/tone.wav
+            build/doom-audio.wav
           if-no-files-found: warn
 
       - name: Publish a release for a version tag

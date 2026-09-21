@@ -1,5 +1,5 @@
 # Launch DOOM and let it get as far as the attract-mode demo, which is the
-# 3D renderer running for real.
+# 3D renderer running for real, then start a game and exercise input and sound.
 
 wait 2
 # DOOM sits at F7 when it is compiled in.
@@ -8,17 +8,47 @@ wait 14
 shot doom-title
 wait 12
 shot doom-demo
-# Into the menu, then a new game on the default skill.
+# Into the menu, then a new game on the default skill. Every one of these
+# keystrokes also makes a noise, which is what the audio capture checks.
 keys esc
 wait 2
-keys ret
-wait 1.5
-keys ret
-wait 1.5
-keys ret
-wait 4
+keys down
+wait 0.6
 keys up
-wait 0.4
-keys right
-wait 2
+wait 0.6
+keys ret
+wait 1.5
+keys down
+wait 0.6
+keys ret
+wait 1.5
+keys ret
+wait 5
+# Fire from the keyboard: ctrl is DOOM's trigger, and a bare modifier only
+# reaches an app because the keyboard driver reports it as a key of its own.
+keys ctrl
+wait 0.5
+keys ctrl
+wait 1.5
 shot doom-ingame
+# Capture the pointer with a click inside the game, sweep, and fire with the
+# mouse button. The window is the third one opened, so it lands here.
+click 413 310
+wait 2
+mon mouse_move 40 0
+wait 0.3
+mon mouse_move 40 0
+wait 0.3
+mon mouse_move 40 0
+wait 0.3
+mon mouse_move 40 0
+wait 1.5
+shot doom-mouselook
+mon mouse_button 1
+wait 0.4
+mon mouse_button 0
+wait 1.5
+# And hand it back.
+keys ctrl-g
+wait 2
+shot doom-released

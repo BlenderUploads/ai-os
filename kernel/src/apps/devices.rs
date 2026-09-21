@@ -137,6 +137,21 @@ impl Devices {
                 palette::WARN,
             ));
         }
+
+        // The audio codec is the one device on this list HALCYON actually
+        // drives, so it is worth saying what came of it.
+        lines.push((String::new(), palette::TEXT));
+        match crate::drivers::ac97::describe() {
+            Some(description) => {
+                lines.push(("driven:".to_string(), palette::AMBER));
+                lines.push((format!("  {}", description), palette::TEXT));
+                lines.push((format!("  {}", crate::audio::status()), palette::TEXT_DIM));
+            }
+            None => lines.push((
+                "no AC'97 codec: this machine has no sound".to_string(),
+                palette::TEXT_FAINT,
+            )),
+        }
         lines
     }
 

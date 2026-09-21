@@ -107,13 +107,22 @@ you never see screen coordinates.
 
 **Input.** `on_key(&KeyEvent, &mut AppResponse)` when focused;
 `on_mouse(&WindowMouse, &mut AppResponse)` with content-relative coordinates and
-`pressed` / `released` / `moved` flags.
+`pressed` / `released` / `moved` flags. Key releases arrive too, which is why
+every app here opens with `if !event.pressed { return; }`.
 
 **Talking back.** Set fields on `AppResponse`:
 
 - `close: true` — close my window
 - `retitle: Some(...)` — change the title bar
 - `launch: Some("name")` — open another app
+- `fullscreen: Some(true)` — fill the screen, no chrome
+- `grab_pointer: Some(true)` — capture the pointer
+
+Capturing the pointer freezes the cursor, stops it being drawn, and starts
+delivering raw `dx`/`dy` on `WindowMouse` instead of moving positions — what a
+game wants and nothing else does. The compositor can take it back without being
+asked (ctrl+G, or the focus moving), so implement `on_pointer_grab(bool)` and
+believe it rather than your own request.
 
 **The rest of the kernel** is a normal module away: `crate::fs::FS` for files,
 `crate::task` for threads, `crate::mm` for memory statistics,

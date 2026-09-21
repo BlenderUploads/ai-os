@@ -1,3 +1,4 @@
+pub mod ac97;
 pub mod keyboard;
 pub mod mouse;
 pub mod pci;

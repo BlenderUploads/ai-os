@@ -38,6 +38,13 @@ applies, and it is handled in the same function that writes CR3.
 | *(next)* | the higher-half kernel image, loaded via `AT()` |
 | *(after the kernel)* | the initrd, placed by GRUB |
 | *(first fitting gap)* | the frame bitmap |
+| *(lowest 68 KiB run)* | the AC'97 buffers, if there is a codec |
+
+The audio buffers are the only allocation in the system with a physical
+constraint: the AC'97 descriptor list holds 32-bit addresses, so its 17
+contiguous pages have to sit below 4 GiB. The frame allocator scans upwards
+from zero, so in practice they land within the first few megabytes of free RAM
+and the check never fires.
 
 The bootstrap page tables map:
 
@@ -67,3 +74,5 @@ is the bottom of that window.
 | per-thread stack | 64 KiB |
 | double-fault and page-fault IST stacks | 16 KiB each |
 | frame bitmap | 1 bit per frame — 16 KiB per GiB of RAM |
+| AC'97 DMA region | 17 contiguous frames: 1 descriptor list + 32 × 2 KiB buffers |
+| audio ring | 8192 stereo frames — 32 KiB, about 170 ms at 48 kHz |

@@ -1,0 +1,14 @@
+# Capture the device browser's PCI page for the README.
+
+wait 1.5
+# Close the two windows that open at boot.
+keys ctrl-w
+wait 0.4
+keys ctrl-w
+wait 0.8
+# F5 is the device browser; one tab moves from CPU to PCI.
+keys f5
+wait 1.5
+keys tab
+wait 1.2
+shot devices

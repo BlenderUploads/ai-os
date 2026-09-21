@@ -24,6 +24,13 @@ Threads
   the one it was given. An idle thread halts the CPU when nothing else can
   run.
 
+Sound
+  One driver, for the Intel AC'97 codec on the PCI bus. The card reads its
+  audio straight out of RAM by DMA, from a list of 32 buffers holding about
+  ten milliseconds each; a kernel thread tops the list up rather than taking
+  an interrupt, which at that size is impossible to tell apart. Look at the
+  PCI tab in Devices to see whether this machine has one.
+
 Nothing is written to disk
   There is no block-device write path anywhere in the source. Not disabled,
   not behind a flag -- absent. That is why booting this on a real machine

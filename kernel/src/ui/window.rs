@@ -11,6 +11,11 @@ use crate::input::KeyEvent;
 pub struct WindowMouse {
     pub x: i32,
     pub y: i32,
+    /// Raw pointer movement since the previous event. Zero unless this window
+    /// holds the pointer, in which case it is the only position information
+    /// there is — `x` and `y` stop moving.
+    pub dx: i32,
+    pub dy: i32,
     pub left: bool,
     pub right: bool,
     pub pressed: bool,
@@ -29,6 +34,10 @@ pub struct AppResponse {
     pub launch: Option<String>,
     /// Ask to fill the screen with no chrome (a game, say).
     pub fullscreen: Option<bool>,
+    /// Ask to take (or give back) the pointer. While a window holds it the
+    /// cursor stops moving and is not drawn, and the window is sent raw
+    /// deltas instead of positions.
+    pub grab_pointer: Option<bool>,
 }
 
 pub trait App {
@@ -37,6 +46,11 @@ pub trait App {
     fn on_key(&mut self, _event: &KeyEvent, _response: &mut AppResponse) {}
 
     fn on_mouse(&mut self, _event: &WindowMouse, _response: &mut AppResponse) {}
+
+    /// The compositor granted or revoked this window's pointer capture. It can
+    /// be revoked without the app asking — on ctrl+G, or when focus moves —
+    /// so an app that grabs the pointer has to listen for it.
+    fn on_pointer_grab(&mut self, _grabbed: bool) {}
 
     /// Called once per composited frame, whether or not the window is focused.
     fn tick(&mut self, _now_ms: u64, _response: &mut AppResponse) {}

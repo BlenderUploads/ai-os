@@ -159,24 +159,28 @@ pub fn feed(byte: u8) {
     let code = byte & 0x7F;
     let was_extended = core::mem::replace(&mut state.extended_pending, false);
 
-    // Modifiers first: they change the meaning of everything else.
+    // Modifiers first: they change the meaning of everything else. They are
+    // also reported as keys, because DOOM fires on ctrl and runs on shift, and
+    // a key that only ever arrives as a flag on some *other* key cannot do
+    // that. Everything that reads `Modifiers` is unaffected either way.
+    let mut modifier = None;
     if !was_extended {
         match code {
             0x2A => {
                 state.shift_left = !released;
-                return;
+                modifier = Some(Key::Shift);
             }
             0x36 => {
                 state.shift_right = !released;
-                return;
+                modifier = Some(Key::Shift);
             }
             0x1D => {
                 state.ctrl = !released;
-                return;
+                modifier = Some(Key::Control);
             }
             0x38 => {
                 state.alt = !released;
-                return;
+                modifier = Some(Key::Alt);
             }
             0x3A => {
                 if !released {
@@ -188,9 +192,24 @@ pub fn feed(byte: u8) {
         }
     } else if code == 0x1D {
         state.ctrl = !released;
-        return;
+        modifier = Some(Key::Control);
     } else if code == 0x38 {
         state.alt = !released;
+        modifier = Some(Key::Alt);
+    }
+
+    if let Some(key) = modifier {
+        input::push_key(KeyEvent {
+            key,
+            character: None,
+            pressed: !released,
+            modifiers: Modifiers {
+                shift: state.shift_left || state.shift_right,
+                ctrl: state.ctrl,
+                alt: state.alt,
+                caps: state.caps,
+            },
+        });
         return;
     }
 

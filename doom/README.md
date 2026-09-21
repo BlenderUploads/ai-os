@@ -1,7 +1,8 @@
 # DOOM on HALCYON
 
 DOOM runs on HALCYON as a window like any other app: menus, the 3D renderer,
-the HUD, keyboard controls, saving. It is the real engine, not a lookalike.
+the HUD, keyboard and mouse controls, sound, saving. It is the real engine, not
+a lookalike.
 
 ## Read this first: licensing
 
@@ -23,10 +24,14 @@ including offering the source, which is this repository.
 |---|---|
 | `src/` | [doomgeneric](https://github.com/ozkl/doomgeneric), a port-friendly fork of id Software's GPL release, minus its platform backends |
 | `LICENSE` | GPL-2, as shipped with that source |
-| `include/`, `libc.c` | **written for HALCYON**, not vendored |
+| `include/`, `libc.c`, `sound.c` | **written for HALCYON**, not vendored |
 
-The engine source is unmodified. Everything HALCYON-specific is in the C
-library and in `kernel/src/apps/doom.rs`.
+`src/` is unmodified, byte for byte. Everything HALCYON-specific lives beside
+it — the C library, the sound module, and `kernel/src/apps/doom.rs`.
+
+One consequence worth recording: `src/i_sound.c` includes `<SDL_mixer.h>`
+whenever the sound path is compiled in, and never calls anything from it. Rather
+than edit that line out, `include/SDL_mixer.h` is an empty header.
 
 ## How the port works
 
@@ -42,12 +47,17 @@ DG_GetKey          pop a translated key from the window's queue
 DG_SetWindowTitle  retitle the window (which is why it says "Freedoom: Phase 1")
 ```
 
+It has no mouse hook at all, so pointer movement goes in the way the engine's
+own backends do it: `D_PostEvent` with an `ev_mouse`. That call belongs to the
+game thread, so the compositor queues the deltas and the game thread drains
+them between frames.
+
 The harder half is that DOOM expects a C library, and HALCYON has none.
 `libc.c` is the smallest one that satisfies it: allocation, strings, character
 classes, `printf` and friends, file I/O, and the five maths functions DOOM
 actually calls (`sin`, `tan`, `atan`, `fabs`, `abs` — all during start-up table
-generation, none in a hot loop). It rests on eight `hal_*` hooks the kernel
-exports.
+generation, none in a hot loop). It rests on a handful of `hal_*` hooks the
+kernel exports.
 
 Three decisions worth knowing about:
 
@@ -64,6 +74,26 @@ Three decisions worth knowing about:
   frame. This is also why the scheduler now saves vector registers across
   context switches: the engine is compiled with SSE, the kernel is soft-float,
   and a thread's FPU state has to survive being pre-empted.
+
+## Sound
+
+doomgeneric leaves `DG_sound_module` for the platform to define, and `sound.c`
+is HALCYON's: sixteen voices, mixing DMX sound lumps into interleaved stereo and
+resampling them with 16.16 fixed-point stepping — DOOM's effects are 8-bit mono
+at 11 or 22 kHz and the codec wants 16-bit stereo at 48 kHz. The result goes
+into a ring buffer in `kernel/src/audio.rs`, and `kernel/src/drivers/ac97.rs`
+feeds it to an AC'97 codec by DMA.
+
+It is self-clocking: `I_UpdateSound` runs once a frame and tops the ring up to
+about 64 ms, so the mixer can only run as fast as the codec drains it. Volume
+and stereo separation use vanilla DOOM's own formula, because that is what the
+game was balanced against.
+
+**Music is not implemented.** DOOM's music is MUS, which would need converting
+to MIDI and then synthesising — an OPL emulator or a wavetable, either of which
+is more work than the whole effects path above. The music module is present but
+declines everything, so the game runs with sound and silence where the music
+would be.
 
 `I_Error` lands in `hal_panic`, which reports into the window and retires the
 game thread rather than taking the machine down. A crash in DOOM is a dead
@@ -86,9 +116,21 @@ The WAD is loaded as its own GRUB module, tagged `doom`, and mounted at
 ## Controls
 
 Arrow keys move and turn, `ctrl` fires, `space` opens doors and flips switches,
-`alt` strafes, number keys select weapons, `esc` opens the menu. **F11** makes
-the window fullscreen — F11 is handled by the window manager and never reaches
-the game.
+`alt` strafes, `shift` runs, number keys select weapons, `esc` opens the menu.
+Those three modifiers reach the game because the keyboard driver reports them as
+keys in their own right as well as as flags — every other application only wants
+the flags, but a game needs to know when the trigger goes down.
+
+**Click in the window to aim with the mouse.** The pointer is captured: the
+cursor disappears and raw movement turns the player, with the left button firing
+and the right strafing. **ctrl+G** gives the pointer back, and so does anything
+that moves the focus elsewhere. Vertical movement does nothing — vanilla DOOM
+walks forward and back on the mouse's Y axis, since it has no vertical aiming to
+spend it on, and that surprises anyone who has used a mouse since 1993.
+
+**F11** makes the window fullscreen — F11 is handled by the window manager and
+never reaches the game. F1 to F10 belong to the desktop's launcher, so DOOM's
+own function keys only work in fullscreen.
 
 ## Rebuilding the vendored source
 

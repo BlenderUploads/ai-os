@@ -10,6 +10,7 @@ extern crate alloc;
 
 pub mod apps;
 pub mod arch;
+pub mod audio;
 pub mod boot;
 pub mod bootscreen;
 pub mod drivers;
@@ -228,6 +229,16 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         Err(report) => screen.step(Status::Fail, report),
     }
 
+    // Needs the scheduler: the codec is fed by its own thread.
+    let has_audio = audio::init();
+    screen.step(
+        if has_audio { Status::Ok } else { Status::Warn },
+        match drivers::ac97::describe() {
+            Some(description) => format!("audio: {}", description),
+            None => format!("audio: no AC'97 codec found; the machine stays quiet"),
+        },
+    );
+
     serial_println!("[boot] HALCYON-BOOT-OK");
 
     if info.cmdline().contains("selftest=fault") {
@@ -280,6 +291,9 @@ fn run_desktop(info: &boot::BootInfo) -> ! {
         let uptime = arch::pit::uptime_ms();
         if uptime - last_report >= 2000 {
             last_report = uptime;
+            // Threads that have retired keep their stacks until someone
+            // collects them, and nothing else is in a position to.
+            task::reap();
             serial_println!(
                 "[ui  ] frame {} at {} ms ({} windows, {} fps, {} ms/frame, {} skipped)",
                 desktop.frames,

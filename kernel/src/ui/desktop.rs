@@ -237,6 +237,9 @@ pub struct Desktop {
     scanlines: bool,
     last_click: u64,
     last_click_pos: (i32, i32),
+    /// The window holding the pointer, if any. While something holds it the
+    /// cursor freezes, stops being drawn, and raw deltas go to that window.
+    grab: Option<u64>,
 }
 
 impl Desktop {
@@ -281,6 +284,7 @@ impl Desktop {
             scanlines: true,
             last_click: 0,
             last_click_pos: (0, 0),
+            grab: None,
         }
     }
 
@@ -562,6 +566,7 @@ impl Desktop {
     // --- event handling ---
 
     pub fn handle_input(&mut self) {
+        self.validate_grab();
         while let Some(event) = input::pop_key() {
             self.on_key(&event);
         }
@@ -570,11 +575,108 @@ impl Desktop {
         }
     }
 
+    // --- pointer capture ---
+
+    /// Hand the pointer to a window. The cursor stops where it is and stops
+    /// being drawn, so the window has to be worth it.
+    fn grab_pointer(&mut self, id: u64) {
+        if self.grab == Some(id) {
+            return;
+        }
+        self.release_pointer();
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        self.grab = Some(id);
+        self.drag = Drag::None;
+        self.menu = None;
+        self.windows[index].app.on_pointer_grab(true);
+        self.set_status("pointer captured — ctrl+G releases it", 4000);
+        crate::serial_println!("[ui  ] POINTER-GRABBED by window {}", id);
+        self.damage.mark_full();
+    }
+
+    fn release_pointer(&mut self) {
+        let Some(id) = self.grab.take() else {
+            return;
+        };
+        if let Some(index) = self.index_of(id) {
+            self.windows[index].app.on_pointer_grab(false);
+        }
+        crate::serial_println!("[ui  ] POINTER-RELEASED by window {}", id);
+        self.damage.mark_full();
+    }
+
+    /// Give the pointer back the moment the window that holds it stops being
+    /// the one in front, so a capture can never outlive its window.
+    fn validate_grab(&mut self) {
+        let Some(id) = self.grab else { return };
+        let stale = match self.index_of(id) {
+            Some(index) => self.windows[index].minimised || self.focused != Some(id),
+            None => true,
+        };
+        if stale {
+            self.release_pointer();
+        }
+    }
+
+    /// Deliver a raw mouse packet to the window holding the pointer.
+    fn forward_grabbed(&mut self, id: u64, event: &input::MouseEvent) {
+        let Some(index) = self.index_of(id) else {
+            self.release_pointer();
+            return;
+        };
+        if event.left_changed {
+            self.left_down = event.left;
+        }
+        if event.right_changed {
+            self.right_down = event.right;
+        }
+        let content = self.windows[index].content_rect();
+        let mouse = WindowMouse {
+            // Frozen, but an app that also wants a position should still get a
+            // sensible one rather than a stale screen coordinate.
+            x: self.cursor_x - content.x,
+            y: self.cursor_y - content.y,
+            dx: event.dx,
+            dy: event.dy,
+            left: event.left,
+            right: event.right,
+            pressed: (event.left_changed && event.left) || (event.right_changed && event.right),
+            released: (event.left_changed && !event.left) || (event.right_changed && !event.right),
+            moved: event.dx != 0 || event.dy != 0,
+            wheel: 0,
+        };
+        let mut response = AppResponse::default();
+        self.windows[index].app.on_mouse(&mouse, &mut response);
+        self.apply(id, response);
+    }
+
     fn on_key(&mut self, event: &KeyEvent) {
         if !event.pressed {
+            // A release is never a shortcut, so it skips all of the below and
+            // goes straight to whoever has the keyboard. Without this a game
+            // sees every key go down and none of them come back up.
+            let target = self
+                .windows
+                .iter()
+                .find(|window| window.fullscreen)
+                .map(|window| window.id)
+                .or(self.focused);
+            if let Some(id) = target {
+                self.deliver_key(id, event);
+            }
             return;
         }
         self.damage.mark_full();
+
+        // The escape hatch from pointer capture, above everything else: a
+        // window that has the mouse must never be able to keep it.
+        if self.grab.is_some() && event.modifiers.ctrl && event.character == Some('g') {
+            self.release_pointer();
+            self.set_status("pointer released", 2500);
+            return;
+        }
 
         // A fullscreen window gets everything except the escape hatch.
         let fullscreen_id = self
@@ -685,6 +787,11 @@ impl Desktop {
     }
 
     fn on_mouse(&mut self, event: input::MouseEvent) {
+        if let Some(id) = self.grab {
+            self.forward_grabbed(id, &event);
+            return;
+        }
+
         let previous = (self.cursor_x, self.cursor_y);
         self.cursor_x = (self.cursor_x + event.dx).clamp(0, self.width - 1);
         self.cursor_y = (self.cursor_y + event.dy).clamp(0, self.height - 1);
@@ -977,6 +1084,8 @@ impl Desktop {
         let event = WindowMouse {
             x: x - content.x,
             y: y - content.y,
+            dx: 0,
+            dy: 0,
             left: self.left_down,
             right: self.right_down,
             pressed,
@@ -1001,6 +1110,13 @@ impl Desktop {
         }
         if let Some(on) = response.fullscreen {
             self.set_fullscreen(id, on);
+        }
+        if let Some(on) = response.grab_pointer {
+            if on {
+                self.grab_pointer(id);
+            } else if self.grab == Some(id) {
+                self.release_pointer();
+            }
         }
         if response.close {
             self.close(id);
@@ -1379,10 +1495,15 @@ impl Desktop {
         }
 
         let (cursor_x, cursor_y, pressed) = (self.cursor_x, self.cursor_y, self.left_down);
+        // A captured pointer is not on screen any more; drawing it would leave
+        // an arrow parked over the game.
+        let show_cursor = self.grab.is_none();
         let scanlines = self.scanlines;
         fb::with_back(|screen| {
             screen.set_clip(region);
-            cursor::draw(screen, cursor_x, cursor_y, pressed);
+            if show_cursor {
+                cursor::draw(screen, cursor_x, cursor_y, pressed);
+            }
             screen.reset_clip();
             if scanlines {
                 crt::apply_scanlines_rect(screen, region);

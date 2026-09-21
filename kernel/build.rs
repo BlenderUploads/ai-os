@@ -28,6 +28,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed={}", doom.join("src").display());
     println!("cargo:rerun-if-changed={}", doom.join("libc.c").display());
+    println!("cargo:rerun-if-changed={}", doom.join("sound.c").display());
     println!("cargo:rerun-if-changed={}", doom.join("include").display());
 
     let compiler = std::env::var("CC").unwrap_or_else(|_| "gcc".to_string());
@@ -67,6 +68,9 @@ fn main() {
         doom.join("src").display().to_string(),
         "-w".into(),
         "-DNORMALUNIX".into(),
+        // Compiles in the sound path; doom/sound.c supplies the module it
+        // expects the platform to define.
+        "-DFEATURE_SOUND".into(),
         "-DDOOMGENERIC_RESX=640".into(),
         "-DDOOMGENERIC_RESY=400".into(),
     ];
@@ -77,7 +81,10 @@ fn main() {
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("c"))
         .collect();
+    // Everything outside doom/src is HALCYON's own: the C library the engine
+    // links against and the sound module it asks a platform to supply.
     sources.push(doom.join("libc.c"));
+    sources.push(doom.join("sound.c"));
     sources.sort();
 
     for source in &sources {

@@ -11,7 +11,8 @@ use crate::arch::port::{inl, outl};
 const CONFIG_ADDRESS: u16 = 0xCF8;
 const CONFIG_DATA: u16 = 0xCFC;
 
-fn read_config(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+/// Read a 32-bit word from a device's configuration space.
+pub fn read_config(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     let address = 0x8000_0000
         | ((bus as u32) << 16)
         | ((device as u32) << 11)
@@ -20,6 +21,19 @@ fn read_config(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     unsafe {
         outl(CONFIG_ADDRESS, address);
         inl(CONFIG_DATA)
+    }
+}
+
+/// Write a 32-bit word to a device's configuration space.
+pub fn write_config(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+    let address = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((function as u32) << 8)
+        | ((offset as u32) & 0xFC);
+    unsafe {
+        outl(CONFIG_ADDRESS, address);
+        outl(CONFIG_DATA, value);
     }
 }
 
@@ -46,7 +60,8 @@ impl Device {
             (0x01, _) => "storage controller",
             (0x02, _) => "network controller",
             (0x03, _) => "display controller",
-            (0x04, 0x03) => "audio device",
+            (0x04, 0x01) => "AC'97 audio controller",
+            (0x04, 0x03) => "HD Audio controller",
             (0x04, _) => "multimedia device",
             (0x05, _) => "memory controller",
             (0x06, 0x00) => "host bridge",
@@ -81,6 +96,33 @@ impl Device {
             0x1039 => "SiS",
             _ => "",
         }
+    }
+
+    /// Base address register `index` (0-5).
+    pub fn bar(&self, index: u8) -> u32 {
+        read_config(self.bus, self.device, self.function, 0x10 + index * 4)
+    }
+
+    /// An I/O-space BAR's port base, or None if this BAR is memory-mapped.
+    pub fn io_base(&self, index: u8) -> Option<u16> {
+        let value = self.bar(index);
+        if value & 1 == 0 {
+            return None;
+        }
+        Some((value & 0xFFFC) as u16)
+    }
+
+    /// Turn on I/O space decoding and bus mastering, which a DMA-capable
+    /// device needs before it can do anything useful.
+    pub fn enable_bus_master(&self) {
+        let command = read_config(self.bus, self.device, self.function, 0x04);
+        write_config(
+            self.bus,
+            self.device,
+            self.function,
+            0x04,
+            command | 0b101, // I/O space | bus master
+        );
     }
 
     pub fn describe(&self) -> String {

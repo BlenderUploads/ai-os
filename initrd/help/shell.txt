@@ -33,6 +33,7 @@ Useful commands
   ls, cat, write, rm     the in-memory filesystem
   mem, ps, uptime        what the machine is doing
   cpu, pci               what the machine is made of
+  audio [freq] [ms]      the sound card, and a tone through it
   date, beep, clear
   run <app>              open an application window
   reboot, poweroff

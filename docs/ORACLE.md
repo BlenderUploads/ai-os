@@ -72,7 +72,9 @@ Strings: `str str-len substr upper lower split chr ord`.
 
 Types: `type nil? list? int? str? fn?`, plus `print` and `env`.
 
-The machine: `uptime ticks time cpu mem threads pci beep peek peek32`.
+The machine: `uptime ticks time cpu mem threads pci beep tone peek peek32`.
+`beep` is the PC speaker, `tone` the sound card — a triangle wave, since the
+kernel is soft-float and a sine would need an FPU.
 
 Files: `ls cat write-file rm`.
 

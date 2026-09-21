@@ -13,12 +13,17 @@ Keyboard
   alt+up          maximise, alt+down restores or minimises
   alt+left/right  snap to half the screen
   F11             fullscreen, and F11 again to come back
+  ctrl+G          take the pointer back from a window that captured it
 
 Mouse
   right-click the desktop    the launcher, plus tile and cascade
   right-click a title bar    that window's menu
   right-click the taskbar    the launcher and display settings
   drag a window to an edge   snap it there
+
+Some windows capture the pointer -- DOOM does, so the mouse can aim. The
+cursor disappears while that lasts. ctrl+G ends it, and so does moving the
+focus to another window.
 
 Everything on this screen was drawn by code in this repository: the font, the
 window frames, the pointer, the scanlines.

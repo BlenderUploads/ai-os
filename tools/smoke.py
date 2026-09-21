@@ -13,6 +13,7 @@ or the boot times out -- so CI can depend on it.
 """
 
 import argparse
+import array
 import os
 import shutil
 import socket
@@ -204,6 +205,33 @@ def ppm_to_png(ppm_path, png_path):
     return width, height
 
 
+def wav_peak(path, rate=44100, channels=2):
+    """Peak amplitude and length of a QEMU capture.
+
+    The header is parsed by hand rather than with `wave`: QEMU only patches the
+    chunk sizes in on a clean shutdown, and a run that was killed still has
+    perfectly good samples after the first 44 bytes.
+    """
+    if not os.path.exists(path):
+        return 0, 0.0
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if len(data) <= 44:
+        return 0, 0.0
+    if data[:4] == b"RIFF" and len(data) >= 36:
+        channels = int.from_bytes(data[22:24], "little") or channels
+        rate = int.from_bytes(data[24:28], "little") or rate
+    body = data[44:]
+    body = body[:len(body) - (len(body) % 2)]
+    samples = array.array("h")
+    samples.frombytes(body)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    peak = max(max(samples), -min(samples)) if samples else 0
+    seconds = len(body) / (2.0 * channels * rate)
+    return peak, seconds
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--iso", required=True)
@@ -222,7 +250,14 @@ def main():
                         help="marker normally treated as fatal but expected here")
     parser.add_argument("--grub-entry", type=int, default=0,
                         help="select this GRUB menu entry instead of the default")
+    parser.add_argument("--audio", action="store_true",
+                        help="attach an AC'97 codec")
+    parser.add_argument("--audio-wav", metavar="FILE",
+                        help="record what the codec plays, and fail if it is "
+                             "silence (implies --audio)")
     args = parser.parse_args()
+    if args.audio_wav:
+        args.audio = True
 
     workdir = tempfile.mkdtemp(prefix="halcyon-smoke-")
     serial_log = os.path.join(workdir, "serial.log")
@@ -238,6 +273,15 @@ def main():
         "-no-reboot",
         "-rtc", "base=utc",
     ]
+    if args.audio:
+        if args.audio_wav:
+            os.makedirs(os.path.dirname(os.path.abspath(args.audio_wav)) or ".",
+                        exist_ok=True)
+            backend = f"wav,id=snd0,path={os.path.abspath(args.audio_wav)}"
+        else:
+            backend = "none,id=snd0"
+        cmd += ["-audiodev", backend, "-device", "AC97,audiodev=snd0"]
+
     if args.firmware == "uefi":
         vars_copy = os.path.join(workdir, "OVMF_VARS.fd")
         shutil.copy(OVMF_VARS, vars_copy)
@@ -352,6 +396,16 @@ def main():
         print(f"[smoke] screenshot {path} ({width}x{height})")
 
     failures = []
+
+    if args.audio_wav:
+        peak, seconds = wav_peak(args.audio_wav)
+        print(f"[smoke] audio {args.audio_wav}: {seconds:.1f}s captured, "
+              f"peak amplitude {peak}")
+        if seconds < 0.5:
+            failures.append("the codec was never started")
+        elif peak < 512:
+            # A peak this low is silence with dither, not a gunshot.
+            failures.append(f"captured audio is silent (peak {peak})")
     for marker in REQUIRED + args.expect:
         if marker not in log:
             failures.append(f"missing marker: {marker!r}")

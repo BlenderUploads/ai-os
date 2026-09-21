@@ -1,15 +1,17 @@
 //! DOOM.
 //!
 //! The engine is the unmodified doomgeneric fork of id Software's release,
-//! vendored under `doom/` and compiled freestanding against the small C
-//! library in `doom/libc.c`. Everything below is the other side of that
-//! bridge: the eight `hal_*` hooks the library calls into, the six `DG_*`
-//! functions doomgeneric expects a platform to supply, and the window that
-//! shows the result.
+//! vendored under `doom/src` and compiled freestanding against the small C
+//! library in `doom/libc.c` and the sound module in `doom/sound.c`. Everything
+//! below is the other side of that bridge: the `hal_*` hooks those two call
+//! into, the six `DG_*` functions doomgeneric expects a platform to supply,
+//! and the window that shows the result.
 //!
 //! The game runs in its own kernel thread. `doomgeneric_Tick` blocks
 //! internally, so driving it from the compositor would stall every other
-//! window on a slow frame.
+//! window on a slow frame. That split is also why pointer movement is queued
+//! here rather than posted straight into the engine: `D_PostEvent` belongs to
+//! the game thread, and the compositor is a different one.
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -39,8 +41,23 @@ const IWAD_PATH: &str = "/doom.wad";
 extern "C" {
     fn doomgeneric_Create(argc: i32, argv: *mut *mut u8);
     fn doomgeneric_Tick();
+    fn D_PostEvent(event: *mut DoomEvent);
     static mut DG_ScreenBuffer: *mut u32;
 }
+
+/// doomgeneric has no mouse hook, so pointer movement goes in through the
+/// engine's own event queue. This must match `event_t` in `doom/src/d_event.h`.
+#[repr(C)]
+struct DoomEvent {
+    kind: i32,
+    data1: i32,
+    data2: i32,
+    data3: i32,
+    data4: i32,
+}
+
+/// `ev_mouse`, the third entry of `evtype_t`.
+const EV_MOUSE: i32 = 2;
 
 struct Shared {
     /// The most recent completed frame, copied out of DOOM's own buffer.
@@ -49,6 +66,10 @@ struct Shared {
     frames: u64,
     /// (pressed, DOOM key code)
     keys: VecDeque<(bool, u8)>,
+    /// (button bitfield, accumulated horizontal movement). Posting these from
+    /// the compositor thread would race the engine's event queue, so they wait
+    /// here and the game thread drains them between frames.
+    mouse: VecDeque<(i32, i32)>,
     title: String,
     failure: Option<String>,
     started: bool,
@@ -61,6 +82,7 @@ impl Shared {
             frame_ready: false,
             frames: 0,
             keys: VecDeque::new(),
+            mouse: VecDeque::new(),
             title: String::new(),
             failure: None,
             started: false,
@@ -170,6 +192,35 @@ pub extern "C" fn hal_ticks_ms() -> u32 {
     pit::uptime_ms() as u32
 }
 
+/// The rate the mixer in `doom/sound.c` must produce, or zero when this
+/// machine has no audio device at all — which is how that file decides whether
+/// to register a sound module in the first place.
+#[no_mangle]
+pub extern "C" fn hal_audio_rate() -> u32 {
+    if crate::audio::present() {
+        crate::audio::SAMPLE_RATE
+    } else {
+        0
+    }
+}
+
+/// Stereo frames already queued. The mixer tops this up to its own target
+/// rather than filling the ring, which is what keeps the latency down.
+#[no_mangle]
+pub extern "C" fn hal_audio_queued() -> u32 {
+    crate::audio::queued_frames() as u32
+}
+
+/// Queue interleaved stereo frames; returns how many were accepted.
+#[no_mangle]
+pub extern "C" fn hal_audio_write(frames: *const i16, count: u32) -> u32 {
+    if frames.is_null() || count == 0 {
+        return 0;
+    }
+    let samples = unsafe { core::slice::from_raw_parts(frames, count as usize * 2) };
+    crate::audio::write(samples) as u32
+}
+
 /// DOOM's `I_Error` path ends here. It must not return, and it must not take
 /// the rest of the machine down: the message is handed to the window and the
 /// game thread retires.
@@ -267,9 +318,46 @@ extern "C" fn doom_thread(_: u64) {
 
     crate::serial_println!("[doom] DOOM-RUNNING");
     while THREAD_RUNNING.load(Ordering::Acquire) {
+        drain_mouse();
         unsafe { doomgeneric_Tick() };
     }
     task::exit_current()
+}
+
+/// Hand the queued pointer movement to the engine. Called only from the game
+/// thread, which is the only thread allowed near `D_PostEvent`.
+fn drain_mouse() {
+    loop {
+        let Some((buttons, dx)) = SHARED.lock().mouse.pop_front() else {
+            break;
+        };
+        let mut event = DoomEvent {
+            kind: EV_MOUSE,
+            data1: buttons,
+            data2: dx,
+            // Vanilla DOOM walks forward and back on the mouse's Y axis, since
+            // it has no vertical aiming to spend it on. That surprises anyone
+            // who has used a mouse since 1993, so it is left at rest.
+            data3: 0,
+            data4: 0,
+        };
+        unsafe { D_PostEvent(&mut event) };
+    }
+}
+
+/// Queue one pointer event, folding pure movement into the pending entry so a
+/// fast sweep cannot flood the queue while a frame is being drawn.
+fn push_mouse(buttons: i32, dx: i32) {
+    let mut shared = SHARED.lock();
+    if let Some(last) = shared.mouse.back_mut() {
+        if last.0 == buttons {
+            last.1 += dx;
+            return;
+        }
+    }
+    if shared.mouse.len() < 64 {
+        shared.mouse.push_back((buttons, dx));
+    }
 }
 
 /// Translate a HALCYON key event into DOOM's own key numbering.
@@ -282,6 +370,10 @@ fn doom_key(event: &KeyEvent) -> Option<u8> {
         Key::Enter => 13,
         Key::Escape => 27,
         Key::Tab => 9,
+        // DOOM's defaults: ctrl fires, alt strafes, shift runs.
+        Key::Control => 0xA3,
+        Key::Alt => 0xB8,
+        Key::Shift => 0xB6,
         Key::Backspace => 0x7F,
         Key::F1 => 0x80 + 0x3B,
         Key::F2 => 0x80 + 0x3C,
@@ -319,6 +411,10 @@ pub struct Doom {
     /// Scratch copy so the surface blit does not hold the shared lock.
     scratch: Vec<u32>,
     missing_wad: bool,
+    /// True while this window owns the pointer and is being sent raw deltas.
+    grabbed: bool,
+    /// Show the pointer-capture hint until this many milliseconds of uptime.
+    hint_until: u64,
 }
 
 impl Doom {
@@ -332,6 +428,8 @@ impl Doom {
             last_frame: 0,
             scratch: Vec::new(),
             missing_wad,
+            grabbed: false,
+            hint_until: pit::uptime_ms() + 8000,
         }
     }
 
@@ -450,6 +548,22 @@ impl App for Doom {
                 }
             }
         }
+
+        // The mouse is worth mentioning, but not forever: the hint shows for a
+        // few seconds when the window opens and again whenever the pointer is
+        // handed back, then gets out of the way.
+        if !self.grabbed && pit::uptime_ms() < self.hint_until {
+            let strip = Rect::new(0, height - 20, width, 20);
+            surface.fill_rect(strip, palette::rgb(0x0A, 0x0E, 0x18));
+            surface.hline(0, height - 20, width, palette::BORDER);
+            surface.text_centered(
+                "click to aim with the mouse  —  ctrl+G gives it back",
+                width / 2,
+                height - 15,
+                palette::AMBER_DIM,
+                Weight::Regular,
+            );
+        }
     }
 
     fn on_key(&mut self, event: &KeyEvent, response: &mut AppResponse) {
@@ -471,7 +585,32 @@ impl App for Doom {
         let _ = response;
     }
 
-    fn on_mouse(&mut self, _event: &WindowMouse, _response: &mut AppResponse) {}
+    fn on_mouse(&mut self, event: &WindowMouse, response: &mut AppResponse) {
+        if self.missing_wad {
+            return;
+        }
+        if !self.grabbed {
+            // A click asks the compositor for the pointer. Until it says yes,
+            // the cursor belongs to the desktop and DOOM sees nothing.
+            if event.pressed && event.left {
+                response.grab_pointer = Some(true);
+            }
+            return;
+        }
+        // Bit 0 fire, bit 1 strafe, the same order DOOM reads them in.
+        let buttons = event.left as i32 | ((event.right as i32) << 1);
+        push_mouse(buttons, event.dx);
+    }
+
+    fn on_pointer_grab(&mut self, grabbed: bool) {
+        self.grabbed = grabbed;
+        self.dirty = true;
+        self.hint_until = if grabbed { 0 } else { pit::uptime_ms() + 5000 };
+        if !grabbed {
+            // Releasing mid-sweep would otherwise leave the player turning.
+            SHARED.lock().mouse.clear();
+        }
+    }
 
     fn tick(&mut self, _now_ms: u64, response: &mut AppResponse) {
         let shared = SHARED.lock();

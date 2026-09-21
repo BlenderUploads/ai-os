@@ -118,7 +118,25 @@ only when nothing else can run, where it halts the CPU until the next interrupt.
 
 `reap()` never collects the running thread — we are executing on its stack.
 
-## 6. The desktop
+## 6. Sound
+
+The one device HALCYON drives by DMA. `drivers/ac97.rs` finds an Intel AC'97
+codec on the PCI bus, allocates 17 physically contiguous pages below 4 GiB (the
+buffer descriptors hold 32-bit addresses), and fills a 32-entry descriptor list
+with 512-frame buffers — 10.7 ms each at 48 kHz.
+
+There is no interrupt handler. A kernel thread polls the current-index register
+every 4 ms and refills whatever the engine has finished with, keeping about six
+buffers ahead of the play cursor. At that buffer size polling is both simpler
+than an IRQ path and impossible to tell apart from one, and the thread sleeps at
+50 ms until something actually asks for sound, so a machine that never plays
+anything never touches the codec.
+
+`audio.rs` is the ring between the two: producers write interleaved stereo and
+never block, because a producer stalling on the codec is worse than one skipping
+a few milliseconds. Short reads are played as silence.
+
+## 7. The desktop
 
 One thread owns everything: it drains the input queues, lets each app tick,
 repaints any window whose app reports itself dirty, composites, and sleeps to
@@ -132,7 +150,7 @@ The `App` trait is deliberately **not** `Send`: the desktop and every app it own
 run on one thread, and requiring `Send` would rule out ORACLE's `Rc`-based
 environments for no benefit.
 
-## 7. ORACLE
+## 8. ORACLE
 
 A small Lisp (`kernel/src/oracle/`) plus a keyword-matched persona. Lists are
 vectors rather than cons pairs; tail positions loop rather than recurse. See
@@ -143,6 +161,7 @@ vectors rather than cons pairs; tail positions loop rather than recurse. See
 - **No disk writes.** There is no block-device write path anywhere in the tree.
   This is what makes booting HALCYON on a real machine safe.
 - **No network stack.** No driver, no TCP, no sockets.
+- **One audio driver.** AC'97 only; no Intel HD Audio, no capture, no MIDI.
 - **No USB.** Input is PS/2 via the 8042. See [HARDWARE.md](HARDWARE.md) for
   what that means for your laptop.
 - **No user mode.** Everything runs in ring 0. The GDT has the ring-3

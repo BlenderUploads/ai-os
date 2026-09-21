@@ -12,6 +12,9 @@ type uptime
 wait 0.4
 type cpu
 wait 0.4
+# Finds the codec and plays a tone through it, which the audio capture checks.
+type audio 440 800
+wait 1.5
 type ls
 wait 0.6
 shot commands

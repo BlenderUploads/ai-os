@@ -74,8 +74,16 @@ nothing but a palette mode, the boot screen will say the display is unavailable.
 **If the mouse misbehaves**, the GRUB menu's **safe mode** entry boots without
 touching the PS/2 mouse at all. The desktop is fully usable from the keyboard.
 
-**No suspend, no battery reporting, no backlight control, no sound beyond the
-PC speaker** (which many laptops no longer have — `beep` will simply be silent).
+**Sound needs an AC'97 codec.** HALCYON has one audio driver, for Intel AC'97
+(PCI class 04:01). That covers a great many machines from roughly 1999 to 2008
+and the default codec in QEMU and VirtualBox, but not Intel HD Audio, which
+replaced it on later hardware. The device browser's **PCI** tab says which you
+have, and the boot screen says whether the codec answered. With no AC'97 the
+machine simply runs silent — nothing else changes.
+
+**No suspend, no battery reporting, no backlight control, no music in DOOM**
+(see [doom/README.md](../doom/README.md)). The PC speaker is still used for the
+boot chime and `beep`, which many laptops no longer have at all.
 
 ## If something goes wrong
 
