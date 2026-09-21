@@ -1,15 +1,19 @@
 //! Built-in applications and the launcher registry.
 
 pub mod about;
+pub mod calculator;
+pub mod devices;
 #[cfg(feature = "doom")]
 pub mod doom;
 pub mod editor;
 pub mod files;
+pub mod help;
 pub mod monitor;
 pub mod paint;
 pub mod shell;
 pub mod snake;
 pub mod terminal;
+pub mod tetris;
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -37,7 +41,8 @@ fn take_editor_target() -> Option<String> {
 
 /// Everything the launcher offers, in F-key order.
 pub fn registry() -> Vec<AppEntry> {
-    vec![
+    #[allow(unused_mut)] // `mut` is only needed when the doom feature is on
+    let mut entries = vec![
         AppEntry {
             name: "terminal",
             title: "Terminal",
@@ -45,14 +50,6 @@ pub fn registry() -> Vec<AppEntry> {
             width: 680,
             height: 430,
             build: || Box::new(terminal::Terminal::new()) as Box<dyn App>,
-        },
-        AppEntry {
-            name: "monitor",
-            title: "System Monitor",
-            icon: glyph::CHIP,
-            width: 520,
-            height: 460,
-            build: || Box::new(monitor::Monitor::new()) as Box<dyn App>,
         },
         AppEntry {
             name: "files",
@@ -76,12 +73,36 @@ pub fn registry() -> Vec<AppEntry> {
             },
         },
         AppEntry {
-            name: "paint",
-            title: "Paint",
-            icon: glyph::DITHER,
+            name: "monitor",
+            title: "System Monitor",
+            icon: glyph::CHIP,
             width: 520,
-            height: 360,
-            build: || Box::new(paint::Paint::new()) as Box<dyn App>,
+            height: 460,
+            build: || Box::new(monitor::Monitor::new()) as Box<dyn App>,
+        },
+        AppEntry {
+            name: "devices",
+            title: "Devices",
+            icon: glyph::CHIP,
+            width: 620,
+            height: 420,
+            build: || Box::new(devices::Devices::new()) as Box<dyn App>,
+        },
+        AppEntry {
+            name: "calculator",
+            title: "Calculator",
+            icon: glyph::DITHER,
+            width: 280,
+            height: 380,
+            build: || Box::new(calculator::Calculator::new()) as Box<dyn App>,
+        },
+        AppEntry {
+            name: "tetris",
+            title: "Tetris",
+            icon: glyph::HALF_BLOCK,
+            width: 380,
+            height: 470,
+            build: || Box::new(tetris::Tetris::new()) as Box<dyn App>,
         },
         AppEntry {
             name: "snake",
@@ -91,14 +112,21 @@ pub fn registry() -> Vec<AppEntry> {
             height: 380,
             build: || Box::new(snake::Snake::new()) as Box<dyn App>,
         },
-        #[cfg(feature = "doom")]
         AppEntry {
-            name: "doom",
-            title: "DOOM",
-            icon: glyph::BLOCK,
-            width: doom::DOOM_WIDTH as i32 + 2,
-            height: doom::DOOM_HEIGHT as i32 + 23,
-            build: || Box::new(doom::Doom::new()) as Box<dyn App>,
+            name: "paint",
+            title: "Paint",
+            icon: glyph::DITHER,
+            width: 520,
+            height: 360,
+            build: || Box::new(paint::Paint::new()) as Box<dyn App>,
+        },
+        AppEntry {
+            name: "help",
+            title: "Manual",
+            icon: glyph::BULLET,
+            width: 620,
+            height: 400,
+            build: || Box::new(help::Help::new()) as Box<dyn App>,
         },
         AppEntry {
             name: "about",
@@ -108,5 +136,21 @@ pub fn registry() -> Vec<AppEntry> {
             height: 330,
             build: || Box::new(about::About::new()) as Box<dyn App>,
         },
-    ]
+    ];
+
+    // DOOM goes near the front when it is built in, so it gets a function key.
+    #[cfg(feature = "doom")]
+    entries.insert(
+        6,
+        AppEntry {
+            name: "doom",
+            title: "DOOM",
+            icon: glyph::BLOCK,
+            width: doom::DOOM_WIDTH as i32 + 2,
+            height: doom::DOOM_HEIGHT as i32 + 23,
+            build: || Box::new(doom::Doom::new()) as Box<dyn App>,
+        },
+    );
+
+    entries
 }

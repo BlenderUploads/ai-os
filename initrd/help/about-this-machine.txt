@@ -1,0 +1,31 @@
+About this machine
+==================
+
+There is no Linux under here, and no libc. The bootstrap that put this CPU
+into long mode, the page tables under every address you can name, the
+scheduler switching between threads, the compositor, the font and the Lisp
+interpreter were all written for this system.
+
+How it boots
+  GRUB loads the kernel through Multiboot2 and enters in 32-bit protected
+  mode. A stub checks for long mode, builds page tables, switches on 64-bit
+  and jumps to the higher half at 0xFFFFFFFF80000000.
+
+Memory
+  A bitmap tracks every 4 KiB frame. Four-level paging gives the kernel
+  honest per-section permissions, a direct map of physical RAM, and a heap
+  that grows on demand. The bootstrap's identity map is deliberately dropped,
+  so a stray write through a low pointer faults instead of quietly corrupting
+  the first four gigabytes.
+
+Threads
+  Pre-emptive and round-robin, driven by the timer at 1000 Hz. A context
+  switch is the interrupt handler returning a different register frame than
+  the one it was given. An idle thread halts the CPU when nothing else can
+  run.
+
+Nothing is written to disk
+  There is no block-device write path anywhere in the source. Not disabled,
+  not behind a flag -- absent. That is why booting this on a real machine
+  cannot alter what is already on it. Files live in RAM and are gone at
+  power-off.

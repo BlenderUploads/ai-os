@@ -1,0 +1,38 @@
+The shell
+=========
+
+The terminal runs hsh. Type `help` for the command list.
+
+Anything in (parentheses) is evaluated by ORACLE, the Lisp built into the
+shell:
+
+  (+ 1 2 3)
+  (define (square x) (* x x))
+  (map square (range 1 9))
+  (fold + 0 (range 101))
+  (filter (lambda (n) (= 0 (mod n 3))) (range 20))
+
+Tail calls work, which matters because a kernel thread only has 64 KiB of
+stack:
+
+  (define (down n) (if (<= n 0) 'done (down (- n 1))))
+  (down 200000)
+
+Type `lisp` for the full language reference.
+
+ORACLE also answers questions in English:
+
+  ask what is halcyon
+  ask how much memory
+  ask are you an llm
+
+That last one is worth trying. It is a hand-written table, not a model, and
+it says so.
+
+Useful commands
+  ls, cat, write, rm     the in-memory filesystem
+  mem, ps, uptime        what the machine is doing
+  cpu, pci               what the machine is made of
+  date, beep, clear
+  run <app>              open an application window
+  reboot, poweroff

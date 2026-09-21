@@ -1,0 +1,24 @@
+Getting started
+===============
+
+HALCYON boots to a desktop. Windows work the way you expect: drag the title
+bar to move, drag any edge or corner to resize, double-click the title bar to
+maximise.
+
+Keyboard
+  F1 - F10        open applications
+  alt+tab         cycle windows (add shift to go backwards)
+  ctrl+W          close the focused window
+  ctrl+M          minimise it
+  alt+up          maximise, alt+down restores or minimises
+  alt+left/right  snap to half the screen
+  F11             fullscreen, and F11 again to come back
+
+Mouse
+  right-click the desktop    the launcher, plus tile and cascade
+  right-click a title bar    that window's menu
+  right-click the taskbar    the launcher and display settings
+  drag a window to an edge   snap it there
+
+Everything on this screen was drawn by code in this repository: the font, the
+window frames, the pointer, the scanlines.
