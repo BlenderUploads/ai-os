@@ -79,6 +79,10 @@ struct Damage {
 /// pipeline again.
 const MAX_DAMAGE_RECTS: usize = 4;
 
+/// The screen every app's default window size was chosen against.
+const REFERENCE_WIDTH: i32 = 1024;
+const REFERENCE_HEIGHT: i32 = 740;
+
 impl Damage {
     fn new() -> Self {
         Self {
@@ -387,10 +391,31 @@ impl Desktop {
         self.spawn_offset = (self.spawn_offset + 26) % 160;
 
         let work = self.work_area();
-        let frame_width = width.min(work.w - 40);
-        let frame_height = height.min(work.h - 40);
-        let x = (40 + offset).min(work.w - frame_width - 8).max(0);
-        let y = (40 + offset).min(work.h - frame_height - 8).max(0);
+        // The registry's sizes were chosen against 1024x768. On a bigger
+        // screen they leave windows huddled in one corner, so they grow with
+        // it — but only so far, because a terminal four times the size is not
+        // four times as useful.
+        let scale = (work.w * 8 / REFERENCE_WIDTH)
+            .min(work.h * 8 / REFERENCE_HEIGHT)
+            .clamp(8, 14);
+        let frame_width = (width * scale / 8).min(work.w - 40);
+        let frame_height = (height * scale / 8).min(work.h - 40);
+        // Cascade from a proportional origin too, so the stack sits in the
+        // upper-left third of the desktop rather than pinned to the corner.
+        let origin_x = (work.w / 12).clamp(40, 200);
+        let origin_y = (work.h / 12).clamp(40, 160);
+        let x = (origin_x + offset).min(work.w - frame_width - 8).max(0);
+        let y = (origin_y + offset).min(work.h - frame_height - 8).max(0);
+
+        // Built before the frame is settled, because an app may have an
+        // opinion about its own size that the registry cannot express.
+        let app = build();
+        let (frame_width, frame_height) = match app.preferred_size((work.w, work.h)) {
+            Some((wanted_w, wanted_h)) => (wanted_w.min(work.w), wanted_h.min(work.h)),
+            None => (frame_width, frame_height),
+        };
+        let x = x.min(work.w - frame_width - 8).max(0);
+        let y = y.min(work.h - frame_height - 8).max(0);
 
         let id = self.next_id;
         self.next_id += 1;
@@ -399,7 +424,7 @@ impl Desktop {
             title,
             icon,
             Rect::new(x, y, frame_width, frame_height),
-            build(),
+            app,
         );
         self.windows.push(window);
         self.focused = Some(id);

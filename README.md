@@ -36,8 +36,9 @@ custom target JSON.
 - **Desktop**: maximise, fullscreen, edge resizing, drag-to-edge snapping,
   context menus, tile and cascade, and pointer capture for anything that wants
   raw mouse movement.
-- **Display**: a Settings app that changes the screen resolution while the
-  machine runs, by driving the adapter's mode registers directly.
+- **Display**: 1920x1080 by default, falling back through whatever the machine
+  can manage, and a Settings app that changes it while the machine runs by
+  driving the adapter's mode registers directly.
 - **Sound**: an AC'97 driver that feeds a codec by DMA from a kernel thread,
   behind a ring buffer anything can write to.
 - **Shell**: `hsh`, with **ORACLE** — a small Lisp with working tail calls —

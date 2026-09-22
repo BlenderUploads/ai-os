@@ -68,6 +68,15 @@ pub trait App {
         (240, 140)
     }
 
+    /// The frame size this window would like when it opens, given the work
+    /// area it has to fit inside. Returning None takes the registry's size,
+    /// scaled by the desktop to suit the screen — which is right for anything
+    /// made of text, and wrong for anything whose content has a fixed pixel
+    /// size and can only be scaled by whole numbers.
+    fn preferred_size(&self, _work: (i32, i32)) -> Option<(i32, i32)> {
+        None
+    }
+
     /// True if the app paints every pixel of its surface each frame. The
     /// compositor can then skip anything underneath it.
     fn opaque(&self) -> bool {

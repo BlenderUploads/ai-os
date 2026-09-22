@@ -49,25 +49,25 @@ jobs:
       - name: Boot test (legacy BIOS)
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
-            --boot-wait 20 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
+            --boot-wait 22 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
             --expect SCHED-OK --audio --screenshots build/shots
 
       - name: Boot test (UEFI)
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware uefi \
-            --boot-wait 28 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
+            --boot-wait 30 --expect HALCYON-DESKTOP-OK --expect HEAP-OK \
             --audio --screenshots build/shots
 
       - name: Fault handler test
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
-            --boot-wait 18 --grub-entry 3 --allow "CPU EXCEPTION" \
+            --boot-wait 20 --grub-entry 3 --allow "CPU EXCEPTION" \
             --expect "faulting address" --screenshots build/shots
 
       - name: Desktop interaction test
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
-            --boot-wait 20 --expect HALCYON-DESKTOP-OK \
+            --boot-wait 22 --expect HALCYON-DESKTOP-OK \
             --script tools/scripts/terminal.txt --screenshots build/shots \
             --audio-wav build/tone.wav
 
@@ -77,7 +77,7 @@ jobs:
       - name: Display settings test
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
-            --boot-wait 20 --expect HALCYON-DESKTOP-OK \
+            --boot-wait 22 --expect HALCYON-DESKTOP-OK \
             --expect RESOLUTION-CHANGED --audio \
             --script tools/scripts/settings.txt --screenshots build/shots
 
@@ -89,7 +89,7 @@ jobs:
       - name: Boot test (DOOM, with sound)
         run: |
           python3 tools/smoke.py --iso build/halcyon-doom.iso --firmware bios \
-            --boot-wait 26 --memory 1G --expect DOOM-RUNNING \
+            --boot-wait 28 --memory 1G --expect DOOM-RUNNING \
             --expect POINTER-GRABBED --expect POINTER-RELEASED \
             --script tools/scripts/doom.txt --screenshots build/shots \
             --audio-wav build/doom-audio.wav

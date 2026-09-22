@@ -32,8 +32,9 @@ keys ctrl
 wait 1.5
 shot doom-ingame
 # Capture the pointer with a click inside the game, sweep, and fire with the
-# mouse button. The window is the third one opened, so it lands here.
-click 413 310
+# mouse button. This point is inside the DOOM window's picture at every screen
+# size the desktop opens it at, which a corner-relative guess would not be.
+click 500 400
 wait 2
 mon mouse_move 40 0
 wait 0.3

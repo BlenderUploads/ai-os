@@ -95,7 +95,7 @@ smoke: iso
 # Boot DOOM, play a few seconds, and assert the captured audio is not silence.
 smoke-doom: doom-iso
 	python3 tools/smoke.py --iso $(BUILD)/halcyon-doom.iso --firmware bios \
-		--memory 1G --boot-wait 26 --expect DOOM-RUNNING \
+		--memory 1G --boot-wait 28 --expect DOOM-RUNNING \
 		--expect POINTER-GRABBED --expect POINTER-RELEASED \
 		--script tools/scripts/doom.txt \
 		--audio-wav $(BUILD)/doom-audio.wav
@@ -104,7 +104,7 @@ smoke-doom: doom-iso
 # followed each time.
 smoke-settings: iso
 	python3 tools/smoke.py --iso $(ISO) --firmware bios --audio \
-		--boot-wait 20 --expect RESOLUTION-CHANGED \
+		--boot-wait 22 --expect RESOLUTION-CHANGED \
 		--script tools/scripts/settings.txt --screenshots $(BUILD)/shots
 
 screenshots: iso

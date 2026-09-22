@@ -28,14 +28,17 @@ mb_header_start:
     .long   mb_header_end - mb_header_start
     .long   -(MB2_MAGIC + MB2_ARCH + (mb_header_end - mb_header_start))
 
-    /* framebuffer request: 1024x768x32, flagged optional so a machine that
-     * cannot provide it still boots far enough to tell us why. */
+    /* Framebuffer request. GRUB turns this into "1920x1080x32,1920x1080,auto"
+     * and works down the list, so a machine that cannot manage the first one
+     * still gets the best mode it has rather than nothing. The tag is also
+     * flagged optional, so a machine with no framebuffer at all still boots
+     * far enough to say why. */
     .align 8
     .short  5                   /* type: framebuffer */
     .short  1                   /* flags: optional   */
     .long   20                  /* size              */
-    .long   1024                /* width             */
-    .long   768                 /* height            */
+    .long   1920                /* width             */
+    .long   1080                /* height            */
     .long   32                  /* depth             */
 
     /* modules must be page aligned (we map the initrd directly) */

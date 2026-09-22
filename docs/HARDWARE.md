@@ -65,11 +65,13 @@ PS/2 and work; some are I2C-attached and will not. An external PS/2 mouse works
 where a port exists. The GUI is usable from the keyboard alone: F1–F7 open
 applications, alt+tab cycles, ctrl+W closes.
 
-**The resolution.** HALCYON asks GRUB for 1024×768×32, flagged optional, so
-GRUB falls back to whatever the hardware can actually provide and the kernel
-adapts — other sizes work, and so do 24- and 16-bit depths. Only direct-colour
-modes are supported: if your firmware offers nothing but a palette mode, the
-boot screen will say the display is unavailable.
+**The resolution.** HALCYON asks GRUB for 1920×1080×32, flagged optional. GRUB
+turns that into a list — the exact mode, then that size at any depth, then
+`auto` — and works down it, so a machine that cannot manage 1080p gets the best
+mode it has rather than nothing. The kernel adapts to whatever arrives: other
+sizes work, and so do 24- and 16-bit depths. Only direct-colour modes are
+supported; if your firmware offers nothing but a palette mode, the boot screen
+will say the display is unavailable.
 
 To change it, it matters a great deal whether you are on a virtual machine:
 

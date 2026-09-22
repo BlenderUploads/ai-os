@@ -633,6 +633,24 @@ impl App for Doom {
     fn min_size(&self) -> (i32, i32) {
         (DOOM_WIDTH as i32, DOOM_HEIGHT as i32)
     }
+
+    /// Open at the largest whole multiple of DOOM's own 640x400 that fits.
+    ///
+    /// The renderer only scales by whole pixels, so any other size just adds
+    /// black bars around the picture — which is exactly what happened when the
+    /// default screen got bigger and the window grew with it.
+    fn preferred_size(&self, work: (i32, i32)) -> Option<(i32, i32)> {
+        use crate::ui::theme;
+        let chrome_w = theme::BORDER * 2;
+        let chrome_h = theme::TITLE_HEIGHT + theme::BORDER;
+        let scale = ((work.0 - 40 - chrome_w) / DOOM_WIDTH as i32)
+            .min((work.1 - 40 - chrome_h) / DOOM_HEIGHT as i32)
+            .max(1);
+        Some((
+            DOOM_WIDTH as i32 * scale + chrome_w,
+            DOOM_HEIGHT as i32 * scale + chrome_h,
+        ))
+    }
 }
 
 /// Is a playable IWAD present?
