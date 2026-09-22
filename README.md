@@ -36,6 +36,8 @@ custom target JSON.
 - **Desktop**: maximise, fullscreen, edge resizing, drag-to-edge snapping,
   context menus, tile and cascade, and pointer capture for anything that wants
   raw mouse movement.
+- **Display**: a Settings app that changes the screen resolution while the
+  machine runs, by driving the adapter's mode registers directly.
 - **Sound**: an AC'97 driver that feeds a codec by DMA from a kernel thread,
   behind a ring buffer anything can write to.
 - **Shell**: `hsh`, with **ORACLE** — a small Lisp with working tail calls —
@@ -111,7 +113,7 @@ The desktop opens with an About window and a terminal.
 
 | | |
 |---|---|
-| **F1–F10** | terminal, files, editor, monitor, devices, calculator, tetris, snake, paint, manual |
+| **F1–F10** | terminal, files, editor, monitor, devices, settings, calculator, tetris, snake, paint |
 | **alt+tab** | cycle windows (shift to go back) |
 | **ctrl+W** / **ctrl+M** | close / minimise |
 | **alt+up / down / left / right** | maximise, restore, snap to half the screen |
@@ -176,12 +178,14 @@ covers that, how the port works, and how to use your own WAD.
 | **System monitor** — live physical memory, heap usage and its history, and the thread table. | **Files** — the RAM filesystem, seeded from the initrd, with a preview pane that hex-dumps binaries. |
 | <img src="docs/screenshots/editor.png" width="390" alt="Text editor with line numbers editing a file"> | <img src="docs/screenshots/paint.png" width="390" alt="Paint window with coloured strokes"> |
 | **Editor** — line numbers, a modified marker, ctrl+S to save back to RAM. | **Paint** — strokes interpolate between mouse samples, so fast movement leaves no gaps. |
-| <img src="docs/screenshots/devices.png" width="390" alt="Device browser showing the PCI bus, with the AC'97 codec listed as driven"> | <img src="docs/screenshots/calculator.png" width="390" alt="Calculator showing 12.5 * 4 = 50"> |
-| **Devices** — CPUID and features, a live PCI enumeration saying which device the audio driver claimed, and the real memory map. | **Calculator** — fixed point, because the kernel is soft-float and a calculator has no business waking the FPU. |
+| <img src="docs/screenshots/devices.png" width="390" alt="Device browser showing the PCI bus, with the AC'97 codec listed as driven"> | <img src="docs/screenshots/settings.png" width="390" alt="Settings showing the display page with a list of screen resolutions"> |
+| **Devices** — CPUID and features, a live PCI enumeration saying which device the audio driver claimed, and the real memory map. | **Settings** — screen resolution, changed while the machine runs; volume; and the power buttons. |
+| <img src="docs/screenshots/calculator.png" width="390" alt="Calculator showing 12.5 * 4 = 50"> | <img src="docs/screenshots/manual.png" width="390" alt="The manual, reading pages from the initrd"> |
+| **Calculator** — fixed point, because the kernel is soft-float and a calculator has no business waking the FPU. | **Manual** — the help pages ship in the initrd, so they live with the system. |
 | <img src="docs/screenshots/tetris.png" width="390" alt="Tetris with a landing shadow and next-piece preview"> | <img src="docs/screenshots/snake.png" width="390" alt="Snake running in a window"> |
 | **Tetris** — landing shadow, next-piece preview, the scoring curve where a four-line clear beats four singles. | **Snake** — every operating system needs one. |
-| <img src="docs/screenshots/manual.png" width="390" alt="The manual, reading pages from the initrd"> | <img src="docs/screenshots/fault.png" width="390" alt="The red HALCYON fault screen showing a page fault and register dump"> |
-| **Manual** — the help pages ship in the initrd, so they live with the system. | **Faults** — when something breaks, HALCYON says what and where, then halts. Provoke it from the GRUB self-test entry. |
+| <img src="docs/screenshots/fault.png" width="390" alt="The red HALCYON fault screen showing a page fault and register dump"> | |
+| **Faults** — when something breaks, HALCYON says what and where, then halts. Provoke it from the GRUB self-test entry. | |
 
 ## Boot sequence
 
@@ -228,8 +232,8 @@ kernel/src/
   ui/        compositor, window manager, menus, theme, cursor
   fs/        tar initrd reader and the RAM filesystem
   oracle/    the Lisp: reader, evaluator, builtins, persona
-  apps/      terminal, files, editor, monitor, devices, calculator,
-             tetris, snake, paint, manual, about -- and doom
+  apps/      terminal, files, editor, monitor, devices, settings,
+             calculator, tetris, snake, paint, manual, about -- and doom
 doom/        the vendored DOOM engine, its C library shim, and its licence
 tools/       mkfont.py (the font), smoke.py (the test harness), mkinitrd.sh
 ```

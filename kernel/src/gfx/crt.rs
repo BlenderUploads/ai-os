@@ -4,11 +4,29 @@
 //! buffer. They are deliberately cheap: a multiply per pixel on alternate rows
 //! and a precomputed edge falloff, no per-pixel branching worth speaking of.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::arch::interrupts::TrapFrame;
 
 use super::draw::{Rect, Surface};
 use super::font::{glyph, Weight, GLYPH_HEIGHT};
 use super::palette::{self, Color};
+
+/// Whether the scanline pass runs. It lives here rather than on the desktop
+/// because two different places offer the switch: the taskbar's menu and the
+/// Settings app, and neither can reach the other's state.
+static SCANLINES: AtomicBool = AtomicBool::new(true);
+
+pub fn scanlines_enabled() -> bool {
+    SCANLINES.load(Ordering::Relaxed)
+}
+
+/// Flip the scanline pass, returning its new state.
+pub fn toggle_scanlines() -> bool {
+    let on = !scanlines_enabled();
+    SCANLINES.store(on, Ordering::Relaxed);
+    on
+}
 
 /// Darken every other row so the display reads as a tube rather than an LCD.
 ///

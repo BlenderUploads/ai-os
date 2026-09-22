@@ -29,7 +29,7 @@ QEMU_COMMON := -m 512M -serial stdio -no-reboot $(QEMU_AUDIO) -cdrom $(ISO)
 OVMF_CODE  := /usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS  := /usr/share/OVMF/OVMF_VARS_4M.fd
 
-.PHONY: all kernel iso run run-uefi smoke smoke-doom screenshots clean fmt check doom-iso run-doom wad
+.PHONY: all kernel iso run run-uefi smoke smoke-doom smoke-settings screenshots clean fmt check doom-iso run-doom wad
 
 all: iso
 
@@ -99,6 +99,13 @@ smoke-doom: doom-iso
 		--expect POINTER-GRABBED --expect POINTER-RELEASED \
 		--script tools/scripts/doom.txt \
 		--audio-wav $(BUILD)/doom-audio.wav
+
+# Change the resolution twice while running, and assert the compositor
+# followed each time.
+smoke-settings: iso
+	python3 tools/smoke.py --iso $(ISO) --firmware bios --audio \
+		--boot-wait 20 --expect RESOLUTION-CHANGED \
+		--script tools/scripts/settings.txt --screenshots $(BUILD)/shots
 
 screenshots: iso
 	python3 tools/smoke.py --iso $(ISO) --firmware bios --screenshots $(BUILD)/shots

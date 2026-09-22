@@ -234,7 +234,6 @@ pub struct Desktop {
     last_second: u8,
     clock: FrameClock,
     show_fps: bool,
-    scanlines: bool,
     last_click: u64,
     last_click_pos: (i32, i32),
     /// The window holding the pointer, if any. While something holds it the
@@ -281,7 +280,6 @@ impl Desktop {
             last_second: 0xFF,
             clock,
             show_fps: false,
-            scanlines: true,
             last_click: 0,
             last_click_pos: (0, 0),
             grab: None,
@@ -297,6 +295,76 @@ impl Desktop {
     /// The area windows may occupy — everything above the taskbar.
     fn work_area(&self) -> Rect {
         Rect::new(0, 0, self.width, self.height - theme::TASKBAR_HEIGHT)
+    }
+
+    /// Rebuild around a screen that changed size underneath us.
+    ///
+    /// The Settings app can change the resolution mid-frame, so rather than
+    /// plumbing an event through every layer the compositor simply asks the
+    /// framebuffer its size once a frame and reacts when the answer changes.
+    /// Cheap, and it also covers anything else that ever sets a mode.
+    fn follow_resolution(&mut self) {
+        let (width, height) = fb::dimensions();
+        let (width, height) = (width as i32, height as i32);
+        if (width, height) == (self.width, self.height) || width == 0 || height == 0 {
+            return;
+        }
+        crate::serial_println!(
+            "[ui  ] RESOLUTION-CHANGED {}x{} -> {}x{}",
+            self.width,
+            self.height,
+            width,
+            height
+        );
+        self.width = width;
+        self.height = height;
+
+        self.backdrop = Surface::new(width as usize, height as usize);
+        crt::draw_backdrop(&mut self.backdrop);
+        crt::apply_vignette(&mut self.backdrop);
+
+        // Drag state and menus refer to the old geometry, and a window that
+        // was off to the right of a wider screen would be unreachable.
+        self.drag = Drag::None;
+        self.snap = Snap::None;
+        self.menu = None;
+        let work = self.work_area();
+        for window in self.windows.iter_mut() {
+            if window.fullscreen {
+                window.frame = Rect::new(0, 0, width, height);
+            } else if window.is_maximised() {
+                // `restore` is where un-maximising puts it back, so it is
+                // clamped rather than replaced.
+                if let Some(previous) = window.restore {
+                    let w = previous.w.min(width);
+                    let h = previous.h.min(work.h);
+                    window.restore = Some(Rect::new(
+                        previous.x.clamp(0, (width - w).max(0)),
+                        previous.y.clamp(0, (work.h - h).max(0)),
+                        w,
+                        h,
+                    ));
+                }
+                window.frame = work;
+            } else {
+                let w = window.frame.w.min(width);
+                let h = window.frame.h.min(work.h);
+                window.frame = Rect::new(
+                    window.frame.x.clamp(0, (width - w).max(0)),
+                    window.frame.y.clamp(0, (work.h - h).max(0)),
+                    w,
+                    h,
+                );
+            }
+            window.sync_content_size();
+            window.needs_paint = true;
+        }
+
+        self.cursor_x = self.cursor_x.clamp(0, width - 1);
+        self.cursor_y = self.cursor_y.clamp(0, height - 1);
+        self.previous_cursor = (self.cursor_x, self.cursor_y);
+        self.last_second = 0xFF;
+        self.damage.mark_full();
     }
 
     fn screen(&self) -> Rect {
@@ -1145,11 +1213,13 @@ impl Desktop {
         items.push(menu::Item::new("Minimise all", Action::MinimiseAll));
         items.push(menu::Item::separator());
         items.push(
-            menu::Item::new("Scanlines", Action::ToggleScanlines).with_hint(if self.scanlines {
-                "on"
-            } else {
-                "off"
-            }),
+            menu::Item::new("Scanlines", Action::ToggleScanlines).with_hint(
+                if crt::scanlines_enabled() {
+                    "on"
+                } else {
+                    "off"
+                },
+            ),
         );
         items.push(
             menu::Item::new("Frame rate", Action::ToggleFps).with_hint(if self.show_fps {
@@ -1229,15 +1299,8 @@ impl Desktop {
                 }
             }
             Action::ToggleScanlines => {
-                self.scanlines = !self.scanlines;
-                self.set_status(
-                    if self.scanlines {
-                        "scanlines on"
-                    } else {
-                        "scanlines off"
-                    },
-                    2000,
-                );
+                let on = crt::toggle_scanlines();
+                self.set_status(if on { "scanlines on" } else { "scanlines off" }, 2000);
             }
             Action::ToggleFps => self.show_fps = !self.show_fps,
             Action::Reboot => crate::arch::acpi::reboot(),
@@ -1314,6 +1377,8 @@ impl Desktop {
 
     /// Composite, unless nothing has changed since the last frame.
     pub fn compose(&mut self) {
+        self.follow_resolution();
+
         // Repaint window contents first: an app that reported itself dirty
         // damages the area its window covers.
         let focused = self.focused;
@@ -1498,7 +1563,7 @@ impl Desktop {
         // A captured pointer is not on screen any more; drawing it would leave
         // an arrow parked over the game.
         let show_cursor = self.grab.is_none();
-        let scanlines = self.scanlines;
+        let scanlines = crt::scanlines_enabled();
         fb::with_back(|screen| {
             screen.set_clip(region);
             if show_cursor {

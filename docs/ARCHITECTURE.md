@@ -104,6 +104,32 @@ once into a cached backdrop surface that is blitted per frame.
 The font is drawn in `tools/mkfont.py` and generated into a committed
 `font_data.rs`. See [FONT.md](FONT.md).
 
+### Changing resolution
+
+GRUB sets the video mode before the kernel runs an instruction, and changing it
+afterwards normally means calling the VESA BIOS — 16-bit code that cannot be
+called from long mode without an emulator.
+
+`gfx/modeset.rs` takes the one route that needs no BIOS: the Bochs DISPI
+registers, a pair of I/O ports that take a width and a height directly. The
+standard adapter in QEMU, Bochs, VirtualBox and VMware implements them; a real
+graphics card does not. The probe is deliberately narrow — the PCI display
+device has to claim the framebuffer the bootloader handed over *and* be one of
+three known adapter IDs — because ports 0x1CE/0x1CF are a configuration
+index/data pair on some real chipsets, and writing to those on someone's laptop
+is not a risk worth taking for a feature that would not work there anyway.
+
+The framebuffer's physical address does not move when the mode changes, so the
+mapping does not have to be rebuilt; paging maps 16 MiB of the aperture at boot
+rather than exactly the booted mode, which is enough for anything on offer. The
+compositor asks the framebuffer its size once a frame and rebuilds the backdrop
+and window geometry when the answer changes, so nothing else in the system has
+to know mode setting exists.
+
+Where it is unavailable, the boot menu's resolution submenu does the same job
+one restart earlier — `set gfxpayload` *after* the `multiboot2` line, because
+that command overwrites gfxpayload from the kernel's own framebuffer tag.
+
 ## 5. Threads
 
 Given §2, a thread is a stack with a saved trap frame on it, and a context

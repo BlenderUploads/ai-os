@@ -1,0 +1,38 @@
+# Open Settings and change the screen resolution while the machine runs.
+#
+# The interesting assertion is in the serial log: RESOLUTION-CHANGED only
+# appears once the compositor has rebuilt itself around the new geometry, and
+# the screenshots that follow it are captured at the new size.
+
+wait 1.5
+keys ctrl-w
+wait 0.4
+keys ctrl-w
+wait 0.8
+# F6 is Settings.
+keys f6
+wait 1.5
+shot settings-display
+# Down one from the top of the list, then apply it.
+keys down
+wait 0.5
+keys ret
+wait 3
+shot settings-after-mode-change
+# Back down to a smaller one, to prove it goes both ways.
+keys down down down down down down
+wait 0.5
+keys ret
+wait 3
+shot settings-smaller
+keys tab
+wait 1
+shot settings-sound
+# The test tone doubles as a check that audio survived the mode change.
+keys down down down down down
+wait 0.4
+keys ret
+wait 2
+keys tab
+wait 1
+shot settings-system

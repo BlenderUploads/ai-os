@@ -65,11 +65,23 @@ PS/2 and work; some are I2C-attached and will not. An external PS/2 mouse works
 where a port exists. The GUI is usable from the keyboard alone: F1–F7 open
 applications, alt+tab cycles, ctrl+W closes.
 
-**Unusual framebuffer formats.** HALCYON asks GRUB for 1024×768×32, but the
-request is flagged optional, so GRUB falls back to whatever the hardware can
-actually provide and the kernel adapts — other sizes work, and so do 24- and
-16-bit depths. Only direct-colour modes are supported: if your firmware offers
-nothing but a palette mode, the boot screen will say the display is unavailable.
+**The resolution.** HALCYON asks GRUB for 1024×768×32, flagged optional, so
+GRUB falls back to whatever the hardware can actually provide and the kernel
+adapts — other sizes work, and so do 24- and 16-bit depths. Only direct-colour
+modes are supported: if your firmware offers nothing but a palette mode, the
+boot screen will say the display is unavailable.
+
+To change it, it matters a great deal whether you are on a virtual machine:
+
+- **In a VM** (QEMU, Bochs, VirtualBox), the standard display adapter has the
+  Bochs DISPI registers, which take a width and a height directly and need no
+  BIOS call. The **Settings** app lists the modes and switches between them
+  while HALCYON runs.
+- **On real hardware**, it does not, and HALCYON has no driver for your
+  graphics card. The mode has to be chosen before the kernel starts: the boot
+  menu's **"choose a screen resolution"** entry does that, and each mode falls
+  back through plainer ones so a machine that cannot manage it still boots.
+  Settings will say so rather than offering a switch that does nothing.
 
 **If the mouse misbehaves**, the GRUB menu's **safe mode** entry boots without
 touching the PS/2 mouse at all. The desktop is fully usable from the keyboard.
@@ -95,7 +107,7 @@ boot chime and `beep`, which many laptops no longer have at all.
 - **The machine reboots immediately.** A triple fault before the exception
   handler was installed. The serial console is the only way to see more: boot
   with a null-modem cable or, in a VM, `-serial stdio`.
-- **You want the boot log.** The third GRUB entry mirrors everything to COM1 at
+- **You want the boot log.** The last GRUB entry mirrors everything to COM1 at
   38400 8N1.
 
 ## Verifying the download

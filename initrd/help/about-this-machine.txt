@@ -24,6 +24,14 @@ Threads
   the one it was given. An idle thread halts the CPU when nothing else can
   run.
 
+The screen
+  GRUB picks the video mode before this kernel runs, and changing it would
+  normally mean calling the VESA BIOS -- 16-bit code a 64-bit kernel cannot
+  call. The emulated adapter in a virtual machine has a pair of registers
+  that take a width and a height directly, which needs no BIOS at all, so
+  Settings can change the resolution while the machine is running. A real
+  graphics card has no such thing, and HALCYON has no driver for one.
+
 Sound
   One driver, for the Intel AC'97 codec on the PCI bus. The card reads its
   audio straight out of RAM by DMA, from a list of 32 buffers holding about

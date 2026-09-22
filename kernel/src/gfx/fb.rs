@@ -228,6 +228,33 @@ pub fn init(info: &FramebufferInfo, virt: u64) -> Result<(), InitError> {
     Ok(())
 }
 
+/// Adopt a new geometry on the same physical framebuffer.
+///
+/// Only the resolution changes; the adapter's linear framebuffer stays where
+/// it is, so the mapping set up at boot is still the right one and only the
+/// numbers the compositor works from need replacing. The caller is responsible
+/// for having checked the new mode fits inside the mapped window.
+pub fn retune(width: usize, height: usize, pitch: usize) {
+    let mut framebuffer = FRAMEBUFFER.lock();
+    if framebuffer.hardware.is_null() {
+        return;
+    }
+    framebuffer.width = width;
+    framebuffer.height = height;
+    framebuffer.pitch = pitch;
+    framebuffer.bytes_per_pixel = 4;
+    // Mode setting always asks for 0x00RRGGBB, and refuses anything else.
+    framebuffer.red_shift = 16;
+    framebuffer.green_shift = 8;
+    framebuffer.blue_shift = 0;
+    framebuffer.fast_path = true;
+    framebuffer.back = Surface::new(width, height);
+    drop(framebuffer);
+    // Whatever was on screen belongs to the old mode; blank it so a partial
+    // repaint cannot leave stripes of the previous resolution behind.
+    FRAMEBUFFER.lock().present();
+}
+
 #[inline]
 pub fn is_ready() -> bool {
     READY.load(Ordering::Acquire)

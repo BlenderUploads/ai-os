@@ -12,6 +12,7 @@
 
 use alloc::format;
 use alloc::string::String;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::arch::pit;
 use crate::arch::port::{inb, inl, outb, outl, outw};
@@ -91,6 +92,22 @@ pub struct Ac97 {
 unsafe impl Send for Ac97 {}
 
 static DEVICE: SpinLock<Option<Ac97>> = SpinLock::new(None);
+/// Master output level, 0-100. Kept outside the device so it survives a reset
+/// and can be read back without knowing whether there is a codec at all.
+static VOLUME: AtomicU32 = AtomicU32::new(100);
+
+pub fn volume() -> u32 {
+    VOLUME.load(Ordering::Relaxed)
+}
+
+/// Set the master output level, 0 (muted) to 100.
+pub fn set_volume(percent: u32) {
+    let percent = percent.min(100);
+    VOLUME.store(percent, Ordering::Relaxed);
+    if let Some(device) = DEVICE.lock().as_ref() {
+        device.apply_volume(percent);
+    }
+}
 
 /// Find an AC'97 codec, wake it up, and hand back whether there is one.
 pub fn init() -> bool {
@@ -171,6 +188,18 @@ pub fn init() -> bool {
 }
 
 impl Ac97 {
+    /// Write the master attenuator: six bits a side, 1.5 dB a step, zero
+    /// loudest, and bit 15 mutes outright.
+    fn apply_volume(&self, percent: u32) {
+        let value = if percent == 0 {
+            0x8000
+        } else {
+            let attenuation = ((100 - percent) * 63 / 100) as u16;
+            (attenuation << 8) | attenuation
+        };
+        unsafe { outw(self.mixer + NAM_MASTER_VOLUME, value) };
+    }
+
     fn pcm_out(&self) -> u16 {
         self.bus_master + NABM_PCM_OUT
     }
@@ -191,10 +220,9 @@ impl Ac97 {
             outw(self.mixer + NAM_RESET, 0);
             pit::delay_ms(2);
 
-            // 0x0000 is full volume on the 6-bit master attenuator; PCM out is
-            // a 5-bit one where 0x08 is unity and 0x00 would add 12 dB of gain
-            // the mixer has no headroom for.
-            outw(self.mixer + NAM_MASTER_VOLUME, 0x0000);
+            // PCM out is a 5-bit attenuator where 0x08 is unity and 0x00 would
+            // add 12 dB of gain the mixer has no headroom for. The master
+            // level is whatever Settings last asked for.
             outw(self.mixer + NAM_PCM_VOLUME, 0x0808);
 
             // Reset the PCM-out engine, which also zeroes CIV and LVI.
@@ -209,6 +237,7 @@ impl Ac97 {
             outl(self.pcm_out() + BOX_BDBAR, self.dma_phys as u32);
             outb(self.pcm_out() + BOX_LVI, 0);
         }
+        self.apply_volume(VOLUME.load(Ordering::Relaxed));
         self.next = 0;
         self.running = false;
     }

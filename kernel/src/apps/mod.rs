@@ -10,6 +10,7 @@ pub mod files;
 pub mod help;
 pub mod monitor;
 pub mod paint;
+pub mod settings;
 pub mod shell;
 pub mod snake;
 pub mod terminal;
@@ -87,6 +88,14 @@ pub fn registry() -> Vec<AppEntry> {
             width: 620,
             height: 420,
             build: || Box::new(devices::Devices::new()) as Box<dyn App>,
+        },
+        AppEntry {
+            name: "settings",
+            title: "Settings",
+            icon: glyph::CHIP,
+            width: 620,
+            height: 460,
+            build: || Box::new(settings::Settings::new()) as Box<dyn App>,
         },
         AppEntry {
             name: "calculator",

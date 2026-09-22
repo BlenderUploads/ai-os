@@ -36,6 +36,10 @@ pub const FRAMEBUFFER_BASE: u64 = 0xFFFF_9000_0000_0000;
 pub const HEAP_BASE: u64 = 0xFFFF_A000_0000_0000;
 pub const HEAP_INITIAL: u64 = 8 * 1024 * 1024;
 pub const HEAP_MAX: u64 = 512 * 1024 * 1024;
+/// How much of the framebuffer aperture to map, whatever mode we booted in.
+/// 16 MiB is 1920x1200x32 with room to spare, and is the aperture the standard
+/// emulated adapters expose.
+pub const FRAMEBUFFER_WINDOW: u64 = 16 * 1024 * 1024;
 
 /// Added to a physical address to reach it through the current mapping. Zero
 /// while the bootstrap identity map is live, PHYSMAP_BASE afterwards.
@@ -259,9 +263,17 @@ pub unsafe fn init(info: &BootInfo, frames: &mut FrameAllocator) -> AddressSpace
     }
 
     // --- framebuffer ---
+    //
+    // Mapped generously rather than exactly. The screen can change resolution
+    // after boot (see gfx/modeset.rs) and a larger mode needs more of the
+    // aperture than the mode we booted in; mapping it now costs a handful of
+    // page tables and saves rebuilding the address space later. The extra
+    // pages are inside the adapter's own BAR, and nothing reads them until a
+    // mode actually uses them.
     let (framebuffer_virt, framebuffer_len) = match info.framebuffer {
         Some(fb) if fb.addr != 0 => {
-            let len = align_up(fb.pitch as u64 * fb.height as u64, FRAME_SIZE);
+            let len =
+                align_up(fb.pitch as u64 * fb.height as u64, FRAME_SIZE).max(FRAMEBUFFER_WINDOW);
             let cache_flags = if write_combining {
                 PAT_4K
             } else {

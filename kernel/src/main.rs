@@ -112,6 +112,10 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
         ),
     );
 
+    // Needs the heap (it enumerates PCI) and the framebuffer mapping, so it
+    // comes after both and before anything offers the user a resolution.
+    gfx::modeset::init(info.framebuffer, memory.space.framebuffer_len);
+
     match &display {
         Ok(()) => {
             let (width, height, depth, fast) = gfx::fb::FRAMEBUFFER.lock().describe();
@@ -128,11 +132,15 @@ pub extern "C" fn kmain(mbi_phys: u64) -> ! {
             screen.step(
                 Status::Ok,
                 format!(
-                    "framebuffer cache: {}",
+                    "framebuffer cache: {}, {}",
                     if memory.space.write_combining {
                         "write-combining"
                     } else {
                         "uncached"
+                    },
+                    match gfx::modeset::unavailable() {
+                        None => format!("resolution changeable in Settings"),
+                        Some(reason) => format!("fixed mode ({})", reason.describe()),
                     }
                 ),
             );
@@ -273,7 +281,7 @@ fn run_desktop(info: &boot::BootInfo) -> ! {
         desktop.open("terminal");
     }
     desktop.set_status(
-        "F1 terminal  F2 monitor  F3 about  |  alt+tab switches",
+        "F1 terminal  F5 devices  F6 settings  |  alt+tab switches windows",
         8000,
     );
 

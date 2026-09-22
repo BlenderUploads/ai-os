@@ -6,7 +6,8 @@ bar to move, drag any edge or corner to resize, double-click the title bar to
 maximise.
 
 Keyboard
-  F1 - F10        open applications
+  F1 - F10        open applications; F6 is Settings, where the screen
+                  resolution lives
   alt+tab         cycle windows (add shift to go backwards)
   ctrl+W          close the focused window
   ctrl+M          minimise it
@@ -24,6 +25,13 @@ Mouse
 Some windows capture the pointer -- DOOM does, so the mouse can aim. The
 cursor disappears while that lasts. ctrl+G ends it, and so does moving the
 focus to another window.
+
+The screen
+  F6 opens Settings, and its Display page lists the resolutions this machine
+  can manage. On a virtual machine the change happens as soon as you press
+  enter. On real hardware it cannot -- there is no driver for your graphics
+  card -- and Settings says so; there the mode is chosen from the boot menu's
+  "choose a screen resolution" entry instead.
 
 Everything on this screen was drawn by code in this repository: the font, the
 window frames, the pointer, the scanlines.

@@ -61,7 +61,7 @@ jobs:
       - name: Fault handler test
         run: |
           python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
-            --boot-wait 18 --grub-entry 2 --allow "CPU EXCEPTION" \
+            --boot-wait 18 --grub-entry 3 --allow "CPU EXCEPTION" \
             --expect "faulting address" --screenshots build/shots
 
       - name: Desktop interaction test
@@ -70,6 +70,16 @@ jobs:
             --boot-wait 20 --expect HALCYON-DESKTOP-OK \
             --script tools/scripts/terminal.txt --screenshots build/shots \
             --audio-wav build/tone.wav
+
+      # Drives the Settings app through two live resolution changes. The
+      # marker only appears once the compositor has rebuilt itself around the
+      # new geometry, so it is a real assertion and not just "did not crash".
+      - name: Display settings test
+        run: |
+          python3 tools/smoke.py --iso build/halcyon.iso --firmware bios \
+            --boot-wait 20 --expect HALCYON-DESKTOP-OK \
+            --expect RESOLUTION-CHANGED --audio \
+            --script tools/scripts/settings.txt --screenshots build/shots
 
       - name: Build the DOOM ISO
         run: make doom-iso
